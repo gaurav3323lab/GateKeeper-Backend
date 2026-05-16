@@ -139,4 +139,37 @@ router.put('/profile', verifyToken, async (req, res) => {
   }
 });
 
+// TEMPORARY SETUP ROUTE — Creates Super Admin with fresh hash
+// Visit: /api/auth/setup-admin once, then it auto-disables
+router.get('/setup-admin', async (req, res) => {
+  try {
+    const password_hash = await bcrypt.hash('1234', 10);
+
+    // Ensure default society exists
+    await db.execute(`
+      INSERT INTO societies (id, name, society_code, address, city, state, zip_code)
+      VALUES (1, 'Gaurav Heights', 'GH001', 'Sector 23', 'Mumbai', 'Maharashtra', '400001')
+      ON DUPLICATE KEY UPDATE name = name
+    `);
+
+    // Delete old super admin if exists, then insert fresh
+    await db.execute(`DELETE FROM users WHERE phone = '9999999999'`);
+    await db.execute(
+      `INSERT INTO users (name, phone, password_hash, role, account_status, society_id)
+       VALUES ('Super Admin', '9999999999', ?, 'super_admin', 'active', 1)`,
+      [password_hash]
+    );
+
+    res.json({
+      message: '✅ Super Admin created successfully!',
+      phone: '9999999999',
+      password: '1234'
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Setup failed', error: err.message });
+  }
+});
+
 module.exports = router;
+
