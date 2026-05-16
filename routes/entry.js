@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { createWorker } = require('tesseract.js');
 const db = require('../config/db');
+const { verifyToken } = require('../middlewares/auth');
 
 // POST /api/entry/scan-plate
 // Accepts: { imageBase64: "data:image/jpeg;base64,..." }
@@ -105,6 +106,52 @@ router.get('/logs', async (req, res) => {
   } catch (err) {
     console.error('Entry Logs Error:', err);
     res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
+// GET /api/entry/resident-logs
+// Get entry logs specifically for the logged-in resident's guests, vehicles, and deliveries
+router.get('/resident-logs', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Guests
+    const [guests] = await db.execute(`
+      SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time
+      FROM guests g
+      LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
+      WHERE g.host_id = ?
+      ORDER BY g.created_at DESC LIMIT 15
+    `, [userId]);
+
+    // Vehicles
+    const [vehicles] = await db.execute(`
+      SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at
+      FROM vehicles v
+      JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
+      WHERE v.user_id = ?
+      ORDER BY el.entry_time DESC LIMIT 15
+    `, [userId]);
+
+    // Deliveries
+    const [deliveries] = await db.execute(`
+      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, d.updated_at as entry_time, NULL as exit_time
+      FROM deliveries d
+      WHERE d.resident_id = ?
+      ORDER BY d.created_at DESC LIMIT 15
+    `, [userId]);
+
+    // Combine and sort by newest first
+    const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
+      const timeA = new Date(a.entry_time || a.created_at).getTime();
+      const timeB = new Date(b.entry_time || b.created_at).getTime();
+      return timeB - timeA;
+    });
+
+    res.json(logs);
+  } catch (err) {
+    console.error('Resident Logs Error:', err);
+    res.status(500).json({ message: 'Server Error' });
   }
 });
 
