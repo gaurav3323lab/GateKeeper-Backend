@@ -78,4 +78,52 @@ router.get('/emergencies', async (req, res) => {
   }
 });
 
+// ── GET Vehicle Stats (Inside/Outside count + logs) ──────────
+router.get('/vehicle-stats', async (req, res) => {
+  try {
+    // Count vehicles inside and outside
+    const [counts] = await db.execute(`
+      SELECT 
+        SUM(CASE WHEN status = 'Inside' THEN 1 ELSE 0 END) AS inside_count,
+        SUM(CASE WHEN status = 'Outside' THEN 1 ELSE 0 END) AS outside_count,
+        COUNT(*) AS total_count
+      FROM vehicles
+    `);
+
+    // Get all vehicles with owner info and status
+    const [vehicles] = await db.execute(`
+      SELECT 
+        v.id, v.vehicle_number, v.type, v.brand, v.status, v.created_at,
+        u.name AS owner_name, u.flat_number, u.phone
+      FROM vehicles v
+      JOIN users u ON v.user_id = u.id
+      ORDER BY v.status ASC, v.created_at DESC
+    `);
+
+    // Get recent vehicle entry/exit logs
+    const [logs] = await db.execute(`
+      SELECT 
+        el.id, el.entry_time, el.exit_time, el.gate_number,
+        v.vehicle_number, v.type, v.brand,
+        u.name AS owner_name, u.flat_number
+      FROM entry_logs el
+      JOIN vehicles v ON el.entity_id = v.id
+      JOIN users u ON v.user_id = u.id
+      WHERE el.entity_type = 'vehicle'
+      ORDER BY el.entry_time DESC
+      LIMIT 30
+    `);
+
+    res.json({
+      stats: counts[0],
+      vehicles,
+      logs
+    });
+  } catch (err) {
+    console.error('Vehicle Stats Error:', err);
+    res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
 module.exports = router;
+
