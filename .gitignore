@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.log
+temp/
+*.zip
+backend.zip
+backend_update.zip
+backend_update_final.zip
