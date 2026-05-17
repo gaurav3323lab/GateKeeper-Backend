@@ -227,7 +227,7 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
 
     // 4. Fetch Deliveries matching flat_number
     const [deliveries] = await db.execute(`
-      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, d.updated_at as entry_time, NULL as exit_time
+      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, d.created_at as entry_time, NULL as exit_time
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
       WHERE u.flat_number = ?

@@ -52,6 +52,31 @@ router.get('/pre-approved', async (req, res) => {
   }
 });
 
+// GET /api/guard/verify-pin/:pin
+// Direct database lookup for any 6-digit invitation PIN code
+router.get('/verify-pin/:pin', verifyToken, async (req, res) => {
+  try {
+    const pin = req.params.pin;
+    const [rows] = await db.execute(`
+      SELECT g.id, 'guest' AS type, g.name, g.phone AS phone, g.purpose, g.valid_to AS valid_date,
+             u.flat_number AS flat, u.name AS resident_name, g.qr_code
+      FROM guests g
+      JOIN users u ON g.host_id = u.id
+      WHERE TRIM(g.qr_code) = ? AND g.valid_to >= DATE_SUB(NOW(), INTERVAL 3 DAY)
+      LIMIT 1
+    `, [pin.trim()]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Invalid PIN Code' });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Verify PIN error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 // ── GET Recent Entry Logs (last 50) ──────────────────────────
 router.get('/entry-logs', async (req, res) => {
   try {
