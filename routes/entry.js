@@ -191,12 +191,12 @@ router.get('/pre-approvals', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const [guests] = await db.execute(`
-      SELECT id, 'guest' AS type, name, purpose, DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_date
+      SELECT id, 'guest' AS type, name, purpose, DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_date, qr_code
       FROM guests WHERE host_id = ? AND valid_to >= NOW()
     `, [userId]);
 
     const [deliveries] = await db.execute(`
-      SELECT id, 'delivery' AS type, company AS company, 'Delivery' AS purpose, DATE_FORMAT(created_at, '%Y-%m-%d') AS valid_date
+      SELECT id, 'delivery' AS type, company AS company, 'Delivery' AS purpose, DATE_FORMAT(created_at, '%Y-%m-%d') AS valid_date, NULL AS qr_code
       FROM deliveries WHERE resident_id = ? AND status IN ('pending', 'approved')
     `, [userId]);
 
@@ -221,10 +221,11 @@ router.post('/pre-approve', verifyToken, async (req, res) => {
       insertId = result.insertId;
     } else {
       const validTo = valid_date ? `${valid_date} 23:59:59` : new Date(Date.now() + 86400000).toISOString().slice(0, 19).replace('T', ' ');
-      const qrCode = `QR-GUEST-${Date.now()}`;
+      // Generate a 6-digit numeric PIN
+      const pin = Math.floor(100000 + Math.random() * 900000).toString();
       const [result] = await db.execute(
         `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to) VALUES (?, '', ?, ?, ?, NOW(), ?)`,
-        [name, purpose || 'Guest', userId, qrCode, validTo]
+        [name, purpose || 'Guest', userId, pin, validTo]
       );
       insertId = result.insertId;
     }
