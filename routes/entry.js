@@ -163,9 +163,14 @@ router.post('/log-preapproved', async (req, res) => {
 });
 
 // GET /api/entry/logs
-// Get recent entry logs for manager/guard view
-router.get('/logs', async (req, res) => {
+// Get recent entry logs for manager/guard view, filtered by society_id
+router.get('/logs', verifyToken, async (req, res) => {
   try {
+    const userId = req.user.id;
+    // Get logged-in user's society_id
+    const [userRows] = await db.execute('SELECT society_id FROM users WHERE id = ?', [userId]);
+    const societyId = userRows[0]?.society_id || 1;
+
     const [rows] = await db.execute(`
       SELECT 
         el.id, el.entity_type, el.entry_time, el.exit_time, el.gate_number,
@@ -188,9 +193,10 @@ router.get('/logs', async (req, res) => {
       LEFT JOIN users uv ON v.user_id = uv.id
       LEFT JOIN staff s ON el.entity_type = 'staff' AND el.entity_id = s.id
       LEFT JOIN users u ON el.guard_id = u.id
+      WHERE u.society_id = ?
       ORDER BY el.entry_time DESC
       LIMIT 100
-    `);
+    `, [societyId]);
     res.json(rows);
   } catch (err) {
     console.error('Entry Logs Error:', err);
