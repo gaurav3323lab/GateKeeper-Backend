@@ -377,6 +377,8 @@ router.delete('/pre-approve/:type/:id', verifyToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: 'Server Error' });
   }
+});
+
 // GET /api/entry/society-contacts
 // Get active security guards and emergency helplines for the society
 router.get('/society-contacts', verifyToken, async (req, res) => {
