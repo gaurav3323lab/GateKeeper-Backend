@@ -175,14 +175,21 @@ router.get('/logs', async (req, res) => {
           WHEN el.entity_type = 'staff' THEN s.name
           ELSE 'Unknown'
         END AS entity_name,
+        CASE 
+          WHEN el.entity_type = 'guest' THEN ug.flat_number
+          WHEN el.entity_type = 'vehicle' THEN uv.flat_number
+          ELSE 'N/A'
+        END AS flat_number,
         u.name AS guard_name
       FROM entry_logs el
       LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
+      LEFT JOIN users ug ON g.host_id = ug.id
       LEFT JOIN vehicles v ON el.entity_type = 'vehicle' AND el.entity_id = v.id
+      LEFT JOIN users uv ON v.user_id = uv.id
       LEFT JOIN staff s ON el.entity_type = 'staff' AND el.entity_id = s.id
       LEFT JOIN users u ON el.guard_id = u.id
       ORDER BY el.entry_time DESC
-      LIMIT 50
+      LIMIT 100
     `);
     res.json(rows);
   } catch (err) {
