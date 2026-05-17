@@ -58,25 +58,69 @@ router.post('/sos', async (req, res) => {
 });
 
 // POST /api/entry/manual-log
-// Guard manually logs a visitor entry
+// Guard manually logs a visitor entry with full entry_logs recording
 router.post('/manual-log', async (req, res) => {
   const { visitor_name, visitor_phone, flat_number, purpose, guard_id } = req.body;
   if (!visitor_name || !flat_number) return res.status(400).json({ message: 'visitor_name and flat_number required' });
 
   try {
-    // Find a guest record or create one inline
+    // 1. Find resident host_id matching the flat number (roles primary/family)
+    const [users] = await db.execute(
+      `SELECT id FROM users WHERE flat_number = ? AND role IN ('resident_primary', 'resident_family') LIMIT 1`,
+      [flat_number]
+    );
+    
+    const hostId = users.length > 0 ? users[0].id : null;
+
+    // 2. Insert into guests table
     const [guestResult] = await db.execute(
       `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to)
-       SELECT ?, ?, ?, u.id, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY)
-       FROM users u WHERE u.flat_number = ? AND u.role = 'resident_primary' LIMIT 1`,
-      [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', flat_number]
+       VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+      [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
     );
 
-    res.status(201).json({ message: 'Entry logged successfully', id: guestResult.insertId });
+    const guestId = guestResult.insertId;
+
+    // 3. Insert into entry_logs table so it shows up in Resident's activity logs!
+    await db.execute(
+      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)
+       VALUES ('guest', ?, NOW(), 'Gate 1', ?)`,
+      [guestId, guard_id || null]
+    );
+
+    res.status(201).json({ message: 'Entry logged successfully', id: guestId });
   } catch (err) {
     console.error('Manual Log Error:', err);
-    // Fallback: if no resident found for that flat, still acknowledge
-    res.status(201).json({ message: 'Entry acknowledged (flat resident not found in system)' });
+    res.status(500).json({ message: 'Failed to log manual entry', error: err.message });
+  }
+});
+
+// POST /api/entry/log-preapproved
+// Guard logs check-in for preapproved guests or deliveries
+router.post('/log-preapproved', async (req, res) => {
+  const { entity_type, entity_id, guard_id } = req.body;
+  if (!entity_type || !entity_id) return res.status(400).json({ message: 'entity_type and entity_id required' });
+
+  try {
+    // 1. Insert into entry_logs table
+    await db.execute(
+      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)
+       VALUES (?, ?, NOW(), 'Gate 1', ?)`,
+      [entity_type, entity_id, guard_id || null]
+    );
+
+    // 2. If it is a delivery, update delivery status to 'arrived' or 'completed'
+    if (entity_type === 'delivery') {
+      await db.execute(
+        `UPDATE deliveries SET status = 'arrived' WHERE id = ?`,
+        [entity_id]
+      );
+    }
+
+    res.status(201).json({ message: 'Pre-approved entry logged successfully' });
+  } catch (err) {
+    console.error('Pre-approved log error:', err);
+    res.status(500).json({ message: 'Failed to log entry', error: err.message });
   }
 });
 
