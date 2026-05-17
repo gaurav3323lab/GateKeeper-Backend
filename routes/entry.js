@@ -192,7 +192,7 @@ router.get('/pre-approvals', verifyToken, async (req, res) => {
     const userId = req.user.id;
     const [guests] = await db.execute(`
       SELECT id, 'guest' AS type, name, purpose, DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_date, qr_code
-      FROM guests WHERE host_id = ? AND valid_to >= NOW()
+      FROM guests WHERE host_id = ? AND valid_to >= DATE_SUB(NOW(), INTERVAL 12 HOUR)
     `, [userId]);
 
     const [deliveries] = await db.execute(`

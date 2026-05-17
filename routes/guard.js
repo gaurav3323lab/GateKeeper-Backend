@@ -17,7 +17,7 @@ router.get('/pre-approved', async (req, res) => {
         u.flat_number AS flat, u.name AS resident_name, g.qr_code
       FROM guests g
       JOIN users u ON g.host_id = u.id
-      WHERE g.valid_to >= NOW() AND u.society_id = ?
+      WHERE g.valid_to >= DATE_SUB(NOW(), INTERVAL 12 HOUR) AND u.society_id = ?
       ORDER BY g.valid_to ASC
     `, [societyId]);
 
