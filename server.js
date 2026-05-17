@@ -80,6 +80,7 @@ app.use('/api/family', require('./routes/family'));
 app.use('/api/societies', require('./routes/societies'));
 app.use('/api/guard', require('./routes/guard'));
 app.use('/api/announcements', require('./routes/announcements'));
+app.use('/api/ads', require('./routes/ads'));
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {

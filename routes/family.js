@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const { verifyToken } = require('../middlewares/auth');
+const bcrypt = require('bcrypt');
 
 router.use(verifyToken);
 
@@ -20,13 +21,14 @@ router.get('/', async (req, res) => {
 
 // POST — Add family member
 router.post('/', async (req, res) => {
-  const { name, phone, relation } = req.body;
-  if (!name || !phone) return res.status(400).json({ message: 'Naam aur phone required hai' });
+  const { name, phone, relation, password } = req.body;
+  if (!name || !phone || !password) return res.status(400).json({ message: 'Naam, phone aur password required hai' });
   try {
+    const password_hash = await bcrypt.hash(password, 10);
     const [result] = await db.execute(
       `INSERT INTO users (name, phone, password_hash, role, account_status, flat_number, parent_id)
-       VALUES (?, ?, 'family_default', 'resident_family', 'active', ?, ?)`,
-      [name, phone, req.user.flat_number, req.user.id]
+       VALUES (?, ?, ?, 'resident_family', 'active', ?, ?)`,
+      [name, phone, password_hash, req.user.flat_number, req.user.id]
     );
     res.status(201).json({ message: 'Family member add ho gaye', id: result.insertId });
   } catch (err) {

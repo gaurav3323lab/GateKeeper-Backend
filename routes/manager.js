@@ -162,13 +162,21 @@ router.get('/staff', async (req, res) => {
 // ── Update Staff ─────────────────────────────────────────────
 router.put('/staff/:type/:id', async (req, res) => {
   const { type, id } = req.params;
-  const { name, phone, role } = req.body;
+  const { name, phone, role, password } = req.body;
   try {
     if (type === 'system') {
-      await db.execute(
-        `UPDATE users SET name = ?, phone = ?, role = ? WHERE id = ? AND role IN ('guard', 'technician')`,
-        [name, phone, role, id]
-      );
+      if (password) {
+        const password_hash = await bcrypt.hash(password, 10);
+        await db.execute(
+          `UPDATE users SET name = ?, phone = ?, role = ?, password_hash = ? WHERE id = ? AND role IN ('guard', 'technician')`,
+          [name, phone, role, password_hash, id]
+        );
+      } else {
+        await db.execute(
+          `UPDATE users SET name = ?, phone = ?, role = ? WHERE id = ? AND role IN ('guard', 'technician')`,
+          [name, phone, role, id]
+        );
+      }
     } else {
       await db.execute(`UPDATE staff SET name = ?, phone = ?, role = ? WHERE id = ?`, [name, phone, role, id]);
     }
