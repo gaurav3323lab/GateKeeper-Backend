@@ -192,36 +192,47 @@ router.get('/logs', async (req, res) => {
 });
 
 // GET /api/entry/resident-logs
-// Get entry logs specifically for the logged-in resident's guests, vehicles, and deliveries
+// Get entry logs specifically for the logged-in resident's flat number (guests, vehicles, and deliveries)
 router.get('/resident-logs', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
     
-    // Guests
+    // 1. Fetch flat_number for the logged-in user
+    const [userRows] = await db.execute('SELECT flat_number FROM users WHERE id = ?', [userId]);
+    const flatNumber = userRows[0]?.flat_number;
+
+    if (!flatNumber) {
+      return res.json([]);
+    }
+
+    // 2. Fetch Guests matching flat_number
     const [guests] = await db.execute(`
       SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time
       FROM guests g
+      JOIN users u ON g.host_id = u.id
       LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
-      WHERE g.host_id = ?
+      WHERE u.flat_number = ?
       ORDER BY g.created_at DESC LIMIT 15
-    `, [userId]);
+    `, [flatNumber]);
 
-    // Vehicles
+    // 3. Fetch Vehicles matching flat_number
     const [vehicles] = await db.execute(`
       SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at
       FROM vehicles v
+      JOIN users u ON v.user_id = u.id
       JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
-      WHERE v.user_id = ?
+      WHERE u.flat_number = ?
       ORDER BY el.entry_time DESC LIMIT 15
-    `, [userId]);
+    `, [flatNumber]);
 
-    // Deliveries
+    // 4. Fetch Deliveries matching flat_number
     const [deliveries] = await db.execute(`
       SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, d.updated_at as entry_time, NULL as exit_time
       FROM deliveries d
-      WHERE d.resident_id = ?
+      JOIN users u ON d.resident_id = u.id
+      WHERE u.flat_number = ?
       ORDER BY d.created_at DESC LIMIT 15
-    `, [userId]);
+    `, [flatNumber]);
 
     // Combine and sort by newest first
     const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
