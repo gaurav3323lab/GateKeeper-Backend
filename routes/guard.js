@@ -155,5 +155,88 @@ router.get('/vehicle-stats', async (req, res) => {
   }
 });
 
+// ── GET Visitors Currently Inside (Checked-in but not exited) ────────────────
+router.get('/inside-visitors', async (req, res) => {
+  try {
+    const [guard] = await db.execute('SELECT society_id FROM users WHERE id = ?', [req.user.id]);
+    const societyId = guard[0]?.society_id || 1;
+
+    const [rows] = await db.execute(`
+      SELECT el.id AS log_id, el.entity_type, el.entity_id, el.entry_time,
+        CASE 
+          WHEN el.entity_type = 'guest' THEN g.name
+          WHEN el.entity_type = 'delivery' THEN d.company
+          ELSE 'Visitor'
+        END AS name,
+        CASE 
+          WHEN el.entity_type = 'guest' THEN g.phone
+          WHEN el.entity_type = 'delivery' THEN d.phone
+          ELSE 'N/A'
+        END AS phone,
+        u.flat_number AS flat, u.name AS resident_name
+      FROM entry_logs el
+      LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
+      LEFT JOIN deliveries d ON el.entity_type = 'delivery' AND el.entity_id = d.id
+      LEFT JOIN users u ON (el.entity_type = 'guest' AND g.host_id = u.id) OR (el.entity_type = 'delivery' AND d.resident_id = u.id)
+      WHERE el.exit_time IS NULL AND el.entity_type IN ('guest', 'delivery') AND u.society_id = ?
+      ORDER BY el.entry_time DESC
+    `, [societyId]);
+
+    res.json(rows);
+  } catch (err) {
+    console.error('Inside Visitors Error:', err);
+    res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
+// ── POST Check-out (Mark Exit) for a Visitor ───────────────────
+router.post('/checkout-visitor', async (req, res) => {
+  const { log_id } = req.body;
+  if (!log_id) return res.status(400).json({ message: 'log_id required' });
+
+  try {
+    // 1. Update exit_time in entry_logs
+    await db.execute(
+      `UPDATE entry_logs SET exit_time = NOW() WHERE id = ?`,
+      [log_id]
+    );
+
+    // 2. Fetch visitor and flat info to send real-time socket notification to resident
+    const [rows] = await db.execute(`
+      SELECT el.entity_type, el.entity_id,
+        CASE 
+          WHEN el.entity_type = 'guest' THEN g.name
+          WHEN el.entity_type = 'delivery' THEN d.company
+          ELSE 'Visitor'
+        END AS name,
+        u.flat_number
+      FROM entry_logs el
+      LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
+      LEFT JOIN deliveries d ON el.entity_type = 'delivery' AND el.entity_id = d.id
+      LEFT JOIN users u ON (el.entity_type = 'guest' AND g.host_id = u.id) OR (el.entity_type = 'delivery' AND d.resident_id = u.id)
+      WHERE el.id = ?
+    `, [log_id]);
+
+    if (rows.length > 0) {
+      const { name, flat_number } = rows[0];
+      const io = req.app.get('io');
+      if (io && flat_number) {
+        // Emit entry log updated event (refreshes logs feed)
+        io.to(`flat_${flat_number}`).emit('entry_log_created');
+        
+        // Emit checkout toast notification!
+        io.to(`flat_${flat_number}`).emit('visitor_checked_out', {
+          visitor_name: name
+        });
+      }
+    }
+
+    res.json({ message: 'Visitor checked out successfully' });
+  } catch (err) {
+    console.error('Checkout Visitor Error:', err);
+    res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
 module.exports = router;
 

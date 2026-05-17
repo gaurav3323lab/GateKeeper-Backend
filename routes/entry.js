@@ -88,11 +88,12 @@ router.post('/manual-log', async (req, res) => {
       [guestId, guard_id || null]
     );
 
-    // 4. Emit real-time log event to Resident's flat room so their logs page auto-refreshes!
+    // 4. Emit real-time log event & check-in toast to Resident's flat room!
     const io = req.app.get('io');
-    if (io) {
-      io.to(`flat_${flat_number}`).emit('entry_log_created', {
-        message: 'Naya Entry Log Aaya Hai!'
+    if (io && flat_number) {
+      io.to(`flat_${flat_number}`).emit('entry_log_created');
+      io.to(`flat_${flat_number}`).emit('visitor_checked_in', {
+        visitor_name: visitor_name
       });
     }
 
@@ -125,27 +126,31 @@ router.post('/log-preapproved', async (req, res) => {
       );
     }
 
-    // 3. Query flat_number to emit socket to the target resident's flat room!
+    // 3. Query flat_number and visitor name to emit socket to the target resident's flat room!
     let flat_number = '';
+    let visitor_name = 'Visitor';
     if (entity_type === 'guest') {
       const [rows] = await db.execute(
-        `SELECT u.flat_number FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
+        `SELECT u.flat_number, g.name FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
         [entity_id]
       );
       flat_number = rows[0]?.flat_number || '';
+      visitor_name = rows[0]?.name || 'Guest';
     } else if (entity_type === 'delivery') {
       const [rows] = await db.execute(
-        `SELECT u.flat_number FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
+        `SELECT u.flat_number, d.company FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
         [entity_id]
       );
       flat_number = rows[0]?.flat_number || '';
+      visitor_name = rows[0]?.company || 'Delivery';
     }
 
     if (flat_number) {
       const io = req.app.get('io');
       if (io) {
-        io.to(`flat_${flat_number}`).emit('entry_log_created', {
-          message: 'Naya Entry Log Aaya Hai!'
+        io.to(`flat_${flat_number}`).emit('entry_log_created');
+        io.to(`flat_${flat_number}`).emit('visitor_checked_in', {
+          visitor_name: visitor_name
         });
       }
     }
