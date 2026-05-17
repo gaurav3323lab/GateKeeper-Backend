@@ -6,6 +6,20 @@ const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
 router.use(verifyToken);
 router.use(authorizeRoles(roles.GUARD));
 
+// Auto-heal society_id if missing for Guard
+router.use(async (req, res, next) => {
+  try {
+    const [guard] = await db.execute('SELECT society_id FROM users WHERE id = ?', [req.user.id]);
+    if (guard.length > 0 && !guard[0].society_id) {
+      await db.execute('UPDATE users SET society_id = 1 WHERE id = ?', [req.user.id]);
+    }
+    next();
+  } catch (err) {
+    console.error('Guard society auto-heal failed:', err);
+    next();
+  }
+});
+
 // ── GET Pre-Approved Guests & Deliveries ─────────────────────
 router.get('/pre-approved', async (req, res) => {
   try {

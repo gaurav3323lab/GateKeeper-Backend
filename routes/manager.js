@@ -56,11 +56,15 @@ router.post('/create-staff', async (req, res) => {
 
   try {
     if (['guard', 'technician'].includes(role)) {
+      // Fetch manager's society_id
+      const [mgr] = await db.execute('SELECT society_id FROM users WHERE id = ?', [req.user.id]);
+      const societyId = mgr[0]?.society_id || 1;
+
       const pwd = password || '123456';
       const password_hash = await bcrypt.hash(pwd, 10);
       const [result] = await db.execute(
-        `INSERT INTO users (name, phone, password_hash, role, account_status) VALUES (?, ?, ?, ?, 'active')`,
-        [name, phone, password_hash, role]
+        `INSERT INTO users (name, phone, password_hash, role, account_status, society_id) VALUES (?, ?, ?, ?, 'active', ?)`,
+        [name, phone, password_hash, role, societyId]
       );
       res.status(201).json({ message: `${role} created successfully`, userId: result.insertId });
     } else {
