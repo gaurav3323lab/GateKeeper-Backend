@@ -185,4 +185,81 @@ router.put('/emergencies/:id/resolve', async (req, res) => {
   }
 });
 
+// ── Resident Pre-Approvals ──────────────────────────────────
+// GET /api/entry/pre-approvals
+router.get('/pre-approvals', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [guests] = await db.execute(`
+      SELECT id, 'guest' AS type, name, purpose, DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_date
+      FROM guests WHERE host_id = ? AND valid_to >= NOW()
+    `, [userId]);
+
+    const [deliveries] = await db.execute(`
+      SELECT id, 'delivery' AS type, company AS company, 'Delivery' AS purpose, DATE_FORMAT(created_at, '%Y-%m-%d') AS valid_date
+      FROM deliveries WHERE resident_id = ? AND status IN ('pending', 'approved')
+    `, [userId]);
+
+    res.json([...guests, ...deliveries]);
+  } catch (err) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// POST /api/entry/pre-approve
+router.post('/pre-approve', verifyToken, async (req, res) => {
+  const { type, company, name, purpose, valid_date } = req.body;
+  try {
+    const userId = req.user.id;
+    let insertId;
+
+    if (type === 'delivery') {
+      const [result] = await db.execute(
+        `INSERT INTO deliveries (company, delivery_person_name, phone, resident_id, status) VALUES (?, 'Pending', '', ?, 'approved')`,
+        [company || 'Other', userId]
+      );
+      insertId = result.insertId;
+    } else {
+      const validTo = valid_date ? `${valid_date} 23:59:59` : new Date(Date.now() + 86400000).toISOString().slice(0, 19).replace('T', ' ');
+      const qrCode = `QR-GUEST-${Date.now()}`;
+      const [result] = await db.execute(
+        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to) VALUES (?, '', ?, ?, ?, NOW(), ?)`,
+        [name, purpose || 'Guest', userId, qrCode, validTo]
+      );
+      insertId = result.insertId;
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      // Get user flat
+      const [user] = await db.execute('SELECT flat_number FROM users WHERE id = ?', [userId]);
+      const flat = user[0]?.flat_number || '';
+      io.to('guard_room').emit('new_pre_approval', {
+        message: `Naya Pre-Approval Aaya Hai: Flat ${flat} se ${type === 'delivery' ? company : name} ke liye.`,
+        type
+      });
+    }
+
+    res.status(201).json({ message: 'Added successfully', id: insertId });
+  } catch (err) {
+    res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
+// DELETE /api/entry/pre-approve/:type/:id
+router.delete('/pre-approve/:type/:id', verifyToken, async (req, res) => {
+  const { type, id } = req.params;
+  const userId = req.user.id;
+  try {
+    if (type === 'delivery') {
+      await db.execute('DELETE FROM deliveries WHERE id = ? AND resident_id = ?', [id, userId]);
+    } else {
+      await db.execute('DELETE FROM guests WHERE id = ? AND host_id = ?', [id, userId]);
+    }
+    res.json({ message: 'Removed successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 module.exports = router;
