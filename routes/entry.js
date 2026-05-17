@@ -88,6 +88,14 @@ router.post('/manual-log', async (req, res) => {
       [guestId, guard_id || null]
     );
 
+    // 4. Emit real-time log event to Resident's flat room so their logs page auto-refreshes!
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`flat_${flat_number}`).emit('entry_log_created', {
+        message: 'Naya Entry Log Aaya Hai!'
+      });
+    }
+
     res.status(201).json({ message: 'Entry logged successfully', id: guestId });
   } catch (err) {
     console.error('Manual Log Error:', err);
@@ -115,6 +123,31 @@ router.post('/log-preapproved', async (req, res) => {
         `UPDATE deliveries SET status = 'arrived' WHERE id = ?`,
         [entity_id]
       );
+    }
+
+    // 3. Query flat_number to emit socket to the target resident's flat room!
+    let flat_number = '';
+    if (entity_type === 'guest') {
+      const [rows] = await db.execute(
+        `SELECT u.flat_number FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
+        [entity_id]
+      );
+      flat_number = rows[0]?.flat_number || '';
+    } else if (entity_type === 'delivery') {
+      const [rows] = await db.execute(
+        `SELECT u.flat_number FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
+        [entity_id]
+      );
+      flat_number = rows[0]?.flat_number || '';
+    }
+
+    if (flat_number) {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`flat_${flat_number}`).emit('entry_log_created', {
+          message: 'Naya Entry Log Aaya Hai!'
+        });
+      }
     }
 
     res.status(201).json({ message: 'Pre-approved entry logged successfully' });
@@ -235,7 +268,7 @@ router.get('/pre-approvals', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const [guests] = await db.execute(`
-      SELECT id, 'guest' AS type, name, purpose, DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_date, qr_code
+      SELECT id, 'guest' AS type, name, phone, purpose, DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_date, qr_code
       FROM guests WHERE host_id = ? AND valid_to >= DATE_SUB(NOW(), INTERVAL 12 HOUR)
     `, [userId]);
 
@@ -252,7 +285,7 @@ router.get('/pre-approvals', verifyToken, async (req, res) => {
 
 // POST /api/entry/pre-approve
 router.post('/pre-approve', verifyToken, async (req, res) => {
-  const { type, company, name, purpose, valid_date } = req.body;
+  const { type, company, name, phone, purpose, valid_date } = req.body;
   try {
     const userId = req.user.id;
     let insertId;
@@ -268,8 +301,8 @@ router.post('/pre-approve', verifyToken, async (req, res) => {
       // Generate a 6-digit numeric PIN
       const pin = Math.floor(100000 + Math.random() * 900000).toString();
       const [result] = await db.execute(
-        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to) VALUES (?, '', ?, ?, ?, NOW(), ?)`,
-        [name, purpose || 'Guest', userId, pin, validTo]
+        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to) VALUES (?, ?, ?, ?, ?, NOW(), ?)`,
+        [name, phone || '', purpose || 'Guest', userId, pin, validTo]
       );
       insertId = result.insertId;
     }

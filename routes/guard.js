@@ -13,7 +13,7 @@ router.get('/pre-approved', async (req, res) => {
     const societyId = guard[0].society_id;
 
     const [guests] = await db.execute(`
-      SELECT g.id, 'guest' AS type, g.name, g.purpose, g.valid_to AS valid_date,
+      SELECT g.id, 'guest' AS type, g.name, g.phone AS phone, g.purpose, g.valid_to AS valid_date,
         u.flat_number AS flat, u.name AS resident_name, g.qr_code
       FROM guests g
       JOIN users u ON g.host_id = u.id
@@ -22,7 +22,7 @@ router.get('/pre-approved', async (req, res) => {
     `, [societyId]);
 
     const [deliveries] = await db.execute(`
-      SELECT d.id, 'delivery' AS type, d.company AS name, 'Delivery' AS purpose, d.created_at AS valid_date,
+      SELECT d.id, 'delivery' AS type, d.company AS name, 'Delivery' AS purpose, d.phone AS phone, d.created_at AS valid_date,
         u.flat_number AS flat, u.name AS resident_name, NULL AS qr_code
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
