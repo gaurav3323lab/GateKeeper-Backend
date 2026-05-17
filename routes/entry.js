@@ -377,6 +377,33 @@ router.delete('/pre-approve/:type/:id', verifyToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: 'Server Error' });
   }
+// GET /api/entry/society-contacts
+// Get active security guards and emergency helplines for the society
+router.get('/society-contacts', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [userRows] = await db.execute('SELECT society_id FROM users WHERE id = ?', [userId]);
+    const societyId = userRows[0]?.society_id || 1;
+
+    // Fetch active guards for this society
+    const [guards] = await db.execute(`
+      SELECT name, phone FROM users
+      WHERE role = 'guard' AND society_id = ? AND account_status = 'active'
+    `, [societyId]);
+
+    // Also include some general emergency helplines
+    const helplines = [
+      { name: 'Main Gate Security Office 🛡️', phone: '022-4918233' },
+      { name: 'Society Management Helpdesk 🏢', phone: '9876543209' },
+      { name: 'Fire Station 🚨', phone: '101' },
+      { name: 'Ambulance Support 🚑', phone: '102' }
+    ];
+
+    res.json({ guards, helplines });
+  } catch (err) {
+    console.error('Society contacts error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
 });
 
 module.exports = router;
