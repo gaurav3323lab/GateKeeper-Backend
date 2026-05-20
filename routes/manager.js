@@ -3,10 +3,11 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
+const { sendPushToUser } = require('../utils/sendPush');
 
 // Apply middleware to all manager routes
 router.use(verifyToken);
-router.use(authorizeRoles(roles.MANAGER, roles.SUPER_ADMIN));
+router.use(authorizeRoles(roles.MANAGER, roles.ADMIN, roles.SUPER_ADMIN));
 
 // ── Approve / Reject a Resident ─────────────────────────────
 router.post('/approve-resident', async (req, res) => {
@@ -24,7 +25,7 @@ router.post('/approve-resident', async (req, res) => {
       return res.status(404).json({ message: 'Resident not found' });
     }
 
-    // ✅ Fixed: emit socket notification to the resident's flat
+    // ✅ Emit socket notification to the resident's flat
     const [residentRows] = await db.execute(
       `SELECT flat_number, name FROM users WHERE id = ?`, [userId]
     );
@@ -40,6 +41,16 @@ router.post('/approve-resident', async (req, res) => {
           name
         });
       }
+
+      // 🔔 Web Push — Resident ko direct OS notification
+      await sendPushToUser(
+        userId,
+        status === 'active' ? '✅ Account Approved!' : '❌ Registration Rejected',
+        status === 'active'
+          ? `Namaste ${name}! Aapka GateKeeper account activate ho gaya hai. Ab login karein.`
+          : `Aapki registration abhi accept nahi hui. Society manager se milein.`,
+        { url: '/', type: 'approval', status }
+      );
     }
 
     res.json({ message: `Resident account marked as ${status}` });
@@ -55,11 +66,10 @@ router.post('/create-staff', async (req, res) => {
   if (!name || !phone || !role) return res.status(400).json({ message: 'name, phone, role required' });
 
   try {
-    if (['guard', 'technician'].includes(role)) {
-      // Fetch manager's society_id
-      const [mgr] = await db.execute('SELECT society_id FROM users WHERE id = ?', [req.user.id]);
-      const societyId = mgr[0]?.society_id || 1;
+    // Use JWT society_id — no DB lookup needed
+    const societyId = req.user.society_id || 1;
 
+    if (['guard', 'technician'].includes(role)) {
       const pwd = password || '123456';
       const password_hash = await bcrypt.hash(pwd, 10);
       const [result] = await db.execute(
@@ -119,12 +129,16 @@ router.get('/managers', async (req, res) => {
   }
 });
 
-// ── Get Pending Residents ─────────────────────────────────────
+// ── Get Pending Residents (Society Filtered) ──────────────────
 router.get('/pending-residents', async (req, res) => {
   try {
-    const [users] = await db.execute(
-      `SELECT id, name, phone, flat_number, created_at FROM users WHERE account_status = 'pending' ORDER BY created_at DESC`
-    );
+    // super_admin sees all, others see only their society
+    const isSuperAdmin = req.user.role === 'super_admin';
+    const query = isSuperAdmin
+      ? `SELECT id, name, phone, flat_number, created_at FROM users WHERE account_status = 'pending' ORDER BY created_at DESC`
+      : `SELECT id, name, phone, flat_number, created_at FROM users WHERE account_status = 'pending' AND society_id = ? ORDER BY created_at DESC`;
+    const params = isSuperAdmin ? [] : [req.user.society_id];
+    const [users] = await db.execute(query, params);
     res.json(users);
   } catch (error) {
     console.error(error);
@@ -132,14 +146,15 @@ router.get('/pending-residents', async (req, res) => {
   }
 });
 
-// ── Get All Residents (active) ───────────────────────────────
+// ── Get All Residents (Society Filtered) ─────────────────────
 router.get('/residents', async (req, res) => {
   try {
-    const [rows] = await db.execute(
-      `SELECT id, name, phone, flat_number, role, account_status, created_at FROM users 
-       WHERE role IN ('resident_primary', 'resident_family') AND account_status = 'active'
-       ORDER BY flat_number`
-    );
+    const isSuperAdmin = req.user.role === 'super_admin';
+    const query = isSuperAdmin
+      ? `SELECT id, name, phone, flat_number, role, account_status, created_at FROM users WHERE role IN ('resident_primary', 'resident_family') AND account_status = 'active' ORDER BY flat_number`
+      : `SELECT id, name, phone, flat_number, role, account_status, created_at FROM users WHERE role IN ('resident_primary', 'resident_family') AND account_status = 'active' AND society_id = ? ORDER BY flat_number`;
+    const params = isSuperAdmin ? [] : [req.user.society_id];
+    const [rows] = await db.execute(query, params);
     res.json(rows);
   } catch (error) {
     console.error(error);
@@ -147,15 +162,16 @@ router.get('/residents', async (req, res) => {
   }
 });
 
-// ── Get Staff ────────────────────────────────────────────────
+// ── Get Staff (Society Filtered) ─────────────────────────────
 router.get('/staff', async (req, res) => {
   try {
-    const [systemStaff] = await db.execute(
-      `SELECT id, name, phone, role, created_at FROM users WHERE role IN ('guard', 'technician') ORDER BY name`
-    );
-    const [externalStaff] = await db.execute(
-      `SELECT id, name, phone, role, qr_code, created_at FROM staff ORDER BY name`
-    );
+    const isSuperAdmin = req.user.role === 'super_admin';
+    const staffQuery = isSuperAdmin
+      ? `SELECT id, name, phone, role, created_at FROM users WHERE role IN ('guard', 'technician') ORDER BY name`
+      : `SELECT id, name, phone, role, created_at FROM users WHERE role IN ('guard', 'technician') AND society_id = ? ORDER BY name`;
+    const staffParams = isSuperAdmin ? [] : [req.user.society_id];
+    const [systemStaff] = await db.execute(staffQuery, staffParams);
+    const [externalStaff] = await db.execute(`SELECT id, name, phone, role, qr_code, created_at FROM staff ORDER BY name`);
     res.json({ systemStaff, externalStaff });
   } catch (error) {
     console.error(error);
@@ -214,6 +230,69 @@ router.delete('/managers/:id', async (req, res) => {
     res.json({ message: 'Manager removed successfully' });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// ── Emergency Contacts CRUD ───────────────────────────────────
+
+// GET all emergency contacts for this society
+router.get('/emergency-contacts', async (req, res) => {
+  try {
+    const societyId = req.user.society_id;
+    const [rows] = await db.execute(
+      `SELECT * FROM emergency_contacts WHERE society_id = ? ORDER BY priority ASC, name ASC`,
+      [societyId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Emergency contacts fetch error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// POST create new emergency contact
+router.post('/emergency-contacts', async (req, res) => {
+  const { name, phone, category, priority } = req.body;
+  if (!name || !phone || !category) return res.status(400).json({ message: 'Name, phone, and category are required' });
+  try {
+    const societyId = req.user.society_id;
+    const [result] = await db.execute(
+      `INSERT INTO emergency_contacts (society_id, name, phone, category, priority) VALUES (?, ?, ?, ?, ?)`,
+      [societyId, name, phone, category, priority || 5]
+    );
+    res.status(201).json({ message: 'Emergency contact added', id: result.insertId });
+  } catch (err) {
+    console.error('Emergency contact create error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// PUT update emergency contact
+router.put('/emergency-contacts/:id', async (req, res) => {
+  const { name, phone, category, priority } = req.body;
+  try {
+    await db.execute(
+      `UPDATE emergency_contacts SET name = ?, phone = ?, category = ?, priority = ? WHERE id = ? AND society_id = ?`,
+      [name, phone, category, priority || 5, req.params.id, req.user.society_id]
+    );
+    res.json({ message: 'Contact updated' });
+  } catch (err) {
+    console.error('Emergency contact update error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// DELETE emergency contact
+router.delete('/emergency-contacts/:id', async (req, res) => {
+  try {
+    await db.execute(
+      `DELETE FROM emergency_contacts WHERE id = ? AND society_id = ?`,
+      [req.params.id, req.user.society_id]
+    );
+    res.json({ message: 'Contact deleted' });
+  } catch (err) {
+    console.error('Emergency contact delete error:', err);
     res.status(500).json({ message: 'Server Error' });
   }
 });

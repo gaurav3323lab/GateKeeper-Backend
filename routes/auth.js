@@ -74,9 +74,9 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials or OTP' });
     }
 
-    // Generate JWT
+    // Generate JWT — includes society_id for role-based isolation
     const token = jwt.sign(
-      { id: user.id, role: user.role, flat_number: user.flat_number }, 
+      { id: user.id, role: user.role, flat_number: user.flat_number, society_id: user.society_id }, 
       process.env.JWT_SECRET || 'secret_key',
       { expiresIn: '30d' }
     );
@@ -88,7 +88,8 @@ router.post('/login', async (req, res) => {
         id: user.id,
         name: user.name,
         role: user.role,
-        flat_number: user.flat_number
+        flat_number: user.flat_number,
+        society_id: user.society_id
       }
     });
 
@@ -168,6 +169,46 @@ router.get('/setup-admin', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Setup failed', error: err.message });
+  }
+});
+
+// RUN MIGRATIONS ROUTE
+// Visit: /api/auth/run-migrations to run tables setup
+router.get('/run-migrations', async (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const migrationsDir = path.join(__dirname, '..', 'migrations');
+    const files = ['emergency_contacts.sql', 'push_subscriptions.sql'];
+    let logs = [];
+
+    for (const file of files) {
+      const filePath = path.join(migrationsDir, file);
+      if (fs.existsSync(filePath)) {
+        const sql = fs.readFileSync(filePath, 'utf8');
+        const queries = sql
+          .split(';')
+          .map(q => q.trim())
+          .filter(q => q.length > 0 && !q.startsWith('--'));
+
+        logs.push(`Running ${queries.length} queries from ${file}...`);
+        for (const query of queries) {
+          try {
+            await db.execute(query);
+          } catch (queryErr) {
+            logs.push(`Error executing: ${query.substring(0, 50)}... -> ${queryErr.message}`);
+          }
+        }
+        logs.push(`Finished ${file}`);
+      } else {
+        logs.push(`File not found: ${file}`);
+      }
+    }
+
+    res.json({ message: 'Migration run complete', logs });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Migration failed', error: err.message });
   }
 });
 

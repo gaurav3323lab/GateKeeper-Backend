@@ -7,7 +7,7 @@ cron.schedule('0 0 * * *', async () => {
   try {
     // 1. Delete old Entry Logs
     const [logResult] = await db.execute(
-      `DELETE FROM entry_logs WHERE created_at < NOW() - INTERVAL 90 DAY`
+      `DELETE FROM entry_logs WHERE entry_time < NOW() - INTERVAL 90 DAY`
     );
     console.log(`[Cron Job] Deleted ${logResult.affectedRows} old entry logs.`);
 

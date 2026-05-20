@@ -33,11 +33,13 @@ const authorizeRoles = (...allowedRoles) => {
 // Common Role Groups for convenience
 const roles = {
   SUPER_ADMIN: 'super_admin',
+  ADMIN: 'admin',           // Society-level admin (above manager, below super_admin)
   MANAGER: 'manager',
   GUARD: 'guard',
   TECHNICIAN: 'technician',
   RESIDENT_PRIMARY: 'resident_primary',
-  RESIDENT_FAMILY: 'resident_family'
+  RESIDENT_FAMILY: 'resident_family',
+  STAFF: 'staff'
 };
 
 module.exports = {

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
+const { sendPushToUser, sendPushToFlat } = require('../utils/sendPush');
 
 router.use(verifyToken);
 router.use(authorizeRoles(roles.GUARD));
@@ -54,7 +55,7 @@ router.get('/pre-approved', async (req, res) => {
 
 // GET /api/guard/verify-pin/:pin
 // Direct database lookup for any 6-digit invitation PIN code
-router.get('/verify-pin/:pin', verifyToken, async (req, res) => {
+router.get('/verify-pin/:pin', async (req, res) => {
   try {
     const pin = req.params.pin;
     const [rows] = await db.execute(`
@@ -77,7 +78,7 @@ router.get('/verify-pin/:pin', verifyToken, async (req, res) => {
   }
 });
 
-// ── GET Recent Entry Logs (last 50) ──────────────────────────
+// ── GET Recent Entry Logs (last 50) ──────────────────────────────
 router.get('/entry-logs', async (req, res) => {
   try {
     const [guard] = await db.execute('SELECT society_id FROM users WHERE id = ?', [req.user.id]);
@@ -92,13 +93,13 @@ router.get('/entry-logs', async (req, res) => {
           WHEN el.entity_type = 'staff' THEN s.name
           ELSE 'Unknown'
         END AS entity_name,
-        u.name AS guard_name
+        gu.name AS guard_name
       FROM entry_logs el
       LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
       LEFT JOIN vehicles v ON el.entity_type = 'vehicle' AND el.entity_id = v.id
       LEFT JOIN staff s ON el.entity_type = 'staff' AND el.entity_id = s.id
-      LEFT JOIN users u ON el.guard_id = u.id
-      WHERE u.society_id = ?
+      LEFT JOIN users gu ON el.guard_id = gu.id
+      WHERE gu.society_id = ? OR (el.guard_id IS NULL AND gu.id IS NULL)
       ORDER BY el.entry_time DESC
       LIMIT 50
     `, [societyId]);
@@ -246,19 +247,99 @@ router.post('/checkout-visitor', async (req, res) => {
       const { name, flat_number } = rows[0];
       const io = req.app.get('io');
       if (io && flat_number) {
-        // Emit entry log updated event (refreshes logs feed)
         io.to(`flat_${flat_number}`).emit('entry_log_created');
-        
-        // Emit checkout toast notification!
         io.to(`flat_${flat_number}`).emit('visitor_checked_out', {
           visitor_name: name
         });
+      }
+
+      // 🔔 Web Push — Resident ko checkout notification
+      if (flat_number) {
+        await sendPushToFlat(
+          flat_number,
+          `🚶 Visitor Chale Gaye`,
+          `${name} society se bahar nikal gaye hain.`,
+          { url: '/', type: 'checkout', flat_number }
+        );
       }
     }
 
     res.json({ message: 'Visitor checked out successfully' });
   } catch (err) {
     console.error('Checkout Visitor Error:', err);
+    res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
+// ── POST Vehicle Entry Log ─────────────────────────────────────
+// Guard vehicle ko scan karke entry/exit mark karta hai
+router.post('/vehicle-log', async (req, res) => {
+  const { vehicle_id, action } = req.body; // action: 'entry' | 'exit'
+  if (!vehicle_id || !action) return res.status(400).json({ message: 'vehicle_id aur action required hai' });
+
+  try {
+    // Fetch vehicle and owner info
+    const [vehicleRows] = await db.execute(
+      `SELECT v.vehicle_number, v.type, v.brand, u.id AS owner_id, u.flat_number, u.name AS owner_name
+       FROM vehicles v JOIN users u ON v.user_id = u.id
+       WHERE v.id = ?`,
+      [vehicle_id]
+    );
+
+    if (!vehicleRows.length) return res.status(404).json({ message: 'Vehicle nahi mili' });
+    const vehicle = vehicleRows[0];
+
+    if (action === 'entry') {
+      // Mark vehicle as Inside + create entry log
+      await db.execute(`UPDATE vehicles SET status = 'Inside' WHERE id = ?`, [vehicle_id]);
+      await db.execute(
+        `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id) VALUES ('vehicle', ?, NOW(), 'Gate 1', ?)`,
+        [vehicle_id, req.user.id]
+      );
+
+      // Socket broadcast
+      const io = req.app.get('io');
+      if (io) io.to(`flat_${vehicle.flat_number}`).emit('entry_log_created');
+
+      // 🔔 Web Push — Vehicle owner ko ENTRY notification
+      await sendPushToUser(
+        vehicle.owner_id,
+        `🚗 Gaadi Society Mein Aayi!`,
+        `${vehicle.vehicle_number} (${vehicle.type}) ne society mein ENTRY ki hai.`,
+        { url: '/', type: 'vehicle_entry', vehicle_id }
+      );
+
+      res.json({ message: `${vehicle.vehicle_number} ki entry log ho gayi` });
+
+    } else if (action === 'exit') {
+      // Mark vehicle as Outside + update exit_time in latest entry log
+      await db.execute(`UPDATE vehicles SET status = 'Outside' WHERE id = ?`, [vehicle_id]);
+      await db.execute(
+        `UPDATE entry_logs SET exit_time = NOW() 
+         WHERE entity_type = 'vehicle' AND entity_id = ? AND exit_time IS NULL
+         ORDER BY entry_time DESC LIMIT 1`,
+        [vehicle_id]
+      );
+
+      // Socket broadcast
+      const io = req.app.get('io');
+      if (io) io.to(`flat_${vehicle.flat_number}`).emit('entry_log_created');
+
+      // 🔔 Web Push — Vehicle owner ko EXIT notification
+      await sendPushToUser(
+        vehicle.owner_id,
+        `🚗 Gaadi Bahar Gayi!`,
+        `${vehicle.vehicle_number} (${vehicle.type}) ne society se EXIT ki hai.`,
+        { url: '/', type: 'vehicle_exit', vehicle_id }
+      );
+
+      res.json({ message: `${vehicle.vehicle_number} ki exit log ho gayi` });
+
+    } else {
+      res.status(400).json({ message: 'Invalid action. Use "entry" or "exit"' });
+    }
+  } catch (err) {
+    console.error('Vehicle Log Error:', err);
     res.status(500).json({ message: 'Server Error', error: err.message });
   }
 });

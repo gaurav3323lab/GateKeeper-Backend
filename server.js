@@ -86,6 +86,7 @@ require('./cron/dataCleanup');
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/admin', require('./routes/admin'));
 app.use('/api/manager', require('./routes/manager'));
 app.use('/api/entry', require('./routes/entry'));
 app.use('/api/vehicles', require('./routes/vehicles'));
@@ -95,6 +96,7 @@ app.use('/api/societies', require('./routes/societies'));
 app.use('/api/guard', require('./routes/guard'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/ads', require('./routes/ads'));
+app.use('/api/push', require('./routes/push'));
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {

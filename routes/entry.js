@@ -3,6 +3,7 @@ const router = express.Router();
 const { createWorker } = require('tesseract.js');
 const db = require('../config/db');
 const { verifyToken } = require('../middlewares/auth');
+const { sendPushToUser, sendPushToRole, sendPushToFlat } = require('../utils/sendPush');
 
 // POST /api/entry/scan-plate
 // Accepts: { imageBase64: "data:image/jpeg;base64,..." }
@@ -27,7 +28,6 @@ router.post('/scan-plate', async (req, res) => {
 });
 
 // POST /api/entry/sos
-// ✅ Fixed: removed broken guard_id FK insert. Now only logs to emergencies + emits socket.
 router.post('/sos', async (req, res) => {
   const { user_id, flat_number, user_name } = req.body;
   if (!user_id) return res.status(400).json({ message: 'user_id required' });
@@ -49,6 +49,15 @@ router.post('/sos', async (req, res) => {
         timestamp: new Date()
       });
     }
+
+    // 🔔 Web Push — Guards aur Managers ko OS notification bheji
+    const pushTitle = `🚨 EMERGENCY SOS!`;
+    const pushBody = `Flat ${flat_number} se SOS alert — ${user_name}. Turant respond karein!`;
+    await Promise.all([
+      sendPushToRole('guard', pushTitle, pushBody, { url: '/', type: 'sos', flat_number }),
+      sendPushToRole('manager', pushTitle, pushBody, { url: '/', type: 'sos', flat_number }),
+      sendPushToRole('super_admin', pushTitle, pushBody, { url: '/', type: 'sos', flat_number }),
+    ]);
 
     res.status(201).json({ message: 'SOS sent successfully', id: result.insertId });
   } catch (err) {
@@ -95,6 +104,16 @@ router.post('/manual-log', async (req, res) => {
       io.to(`flat_${flat_number}`).emit('visitor_checked_in', {
         visitor_name: visitor_name
       });
+    }
+
+    // 🔔 Web Push — Resident ko visitor entry notification
+    if (flat_number) {
+      await sendPushToFlat(
+        flat_number,
+        `🚪 Visitor Aaya!`,
+        `${visitor_name} gate par aaye hain. Purpose: ${purpose || 'Walk-in'}`,
+        { url: '/', type: 'visitor', flat_number }
+      );
     }
 
     res.status(201).json({ message: 'Entry logged successfully', id: guestId });
@@ -153,6 +172,14 @@ router.post('/log-preapproved', async (req, res) => {
           visitor_name: visitor_name
         });
       }
+
+      // 🔔 Web Push — Resident ko pre-approved entry notification
+      await sendPushToFlat(
+        flat_number,
+        entity_type === 'delivery' ? `📦 Delivery Aayi!` : `✅ Visitor Checked In`,
+        `${visitor_name} society mein enter kar gaye hain.`,
+        { url: '/', type: 'checkin', flat_number }
+      );
     }
 
     res.status(201).json({ message: 'Pre-approved entry logged successfully' });
@@ -185,15 +212,15 @@ router.get('/logs', verifyToken, async (req, res) => {
           WHEN el.entity_type = 'vehicle' THEN uv.flat_number
           ELSE 'N/A'
         END AS flat_number,
-        u.name AS guard_name
+        gu.name AS guard_name
       FROM entry_logs el
       LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
       LEFT JOIN users ug ON g.host_id = ug.id
       LEFT JOIN vehicles v ON el.entity_type = 'vehicle' AND el.entity_id = v.id
       LEFT JOIN users uv ON v.user_id = uv.id
       LEFT JOIN staff s ON el.entity_type = 'staff' AND el.entity_id = s.id
-      LEFT JOIN users u ON el.guard_id = u.id
-      WHERE u.society_id = ?
+      LEFT JOIN users gu ON el.guard_id = gu.id
+      WHERE COALESCE(ug.society_id, uv.society_id, gu.society_id) = ? OR el.guard_id IS NULL
       ORDER BY el.entry_time DESC
       LIMIT 100
     `, [societyId]);
@@ -393,13 +420,23 @@ router.get('/society-contacts', verifyToken, async (req, res) => {
       WHERE role = 'guard' AND society_id = ? AND account_status = 'active'
     `, [societyId]);
 
-    // Also include some general emergency helplines
-    const helplines = [
-      { name: 'Main Gate Security Office 🛡️', phone: '022-4918233' },
-      { name: 'Society Management Helpdesk 🏢', phone: '9876543209' },
-      { name: 'Fire Station 🚨', phone: '101' },
-      { name: 'Ambulance Support 🚑', phone: '102' }
-    ];
+    // Fetch custom emergency contacts for this society from the database
+    const [customContacts] = await db.execute(`
+      SELECT name, phone, category FROM emergency_contacts
+      WHERE society_id = ?
+      ORDER BY priority ASC, name ASC
+    `, [societyId]);
+
+    // Fallback to general helplines if none configured in db
+    let helplines = customContacts;
+    if (helplines.length === 0) {
+      helplines = [
+        { name: 'Main Gate Security Office 🛡️', phone: '022-4918233', category: 'Security' },
+        { name: 'Society Management Helpdesk 🏢', phone: '9876543209', category: 'Committee' },
+        { name: 'Fire Station 🚨', phone: '101', category: 'Fire Brigade' },
+        { name: 'Ambulance Support 🚑', phone: '102', category: 'Ambulance' }
+      ];
+    }
 
     res.json({ guards, helplines });
   } catch (err) {
