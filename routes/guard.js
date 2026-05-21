@@ -43,7 +43,9 @@ router.get('/pre-approved', async (req, res) => {
         u.flat_number AS flat, u.name AS resident_name, NULL AS qr_code
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
-      WHERE (d.status = 'pending' OR d.status = 'approved') AND u.society_id = ?
+      WHERE (d.status = 'pending' OR d.status = 'approved') 
+        AND u.society_id = ?
+        AND d.id NOT IN (SELECT DISTINCT entity_id FROM entry_logs WHERE entity_type = 'delivery')
       ORDER BY d.created_at DESC
       LIMIT 30
     `, [societyId]);
