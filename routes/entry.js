@@ -130,6 +130,15 @@ router.post('/log-preapproved', async (req, res) => {
   if (!entity_type || !entity_id) return res.status(400).json({ message: 'entity_type and entity_id required' });
 
   try {
+    // Check if already checked-in and not checked-out
+    const [existing] = await db.execute(
+      `SELECT id FROM entry_logs WHERE entity_type = ? AND entity_id = ? AND exit_time IS NULL`,
+      [entity_type, entity_id]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ message: 'Visitor is already checked in!' });
+    }
+
     // 1. Insert into entry_logs table
     await db.execute(
       `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)

@@ -108,14 +108,33 @@ async function autoMigrate() {
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id         INT AUTO_INCREMENT PRIMARY KEY,
         user_id    INT  NOT NULL,
-        endpoint   TEXT NOT NULL,
-        p256dh     TEXT NOT NULL,
-        auth       TEXT NOT NULL,
+        endpoint   TEXT NULL,
+        p256dh     TEXT NULL,
+        auth       TEXT NULL,
+        fcm_token  VARCHAR(255) NULL UNIQUE,
+        platform   VARCHAR(50) DEFAULT 'web',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_endpoint (endpoint(500)),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
+
+    // Dynamic upgrades for pre-existing push_subscriptions table
+    try {
+      await db.execute('ALTER TABLE push_subscriptions MODIFY COLUMN endpoint TEXT NULL');
+      await db.execute('ALTER TABLE push_subscriptions MODIFY COLUMN p256dh TEXT NULL');
+      await db.execute('ALTER TABLE push_subscriptions MODIFY COLUMN auth TEXT NULL');
+    } catch (e) { /* ignore modification errors if already modified */ }
+
+    try {
+      await db.execute('ALTER TABLE push_subscriptions ADD COLUMN fcm_token VARCHAR(255) NULL UNIQUE');
+      console.log('✅ Auto-migration: Added fcm_token column successfully.');
+    } catch (e) { /* ignore if column already exists */ }
+
+    try {
+      await db.execute('ALTER TABLE push_subscriptions ADD COLUMN platform VARCHAR(50) DEFAULT "web"');
+      console.log('✅ Auto-migration: Added platform column successfully.');
+    } catch (e) { /* ignore if column already exists */ }
+
     await db.execute(`
       CREATE TABLE IF NOT EXISTS emergency_contacts (
         id         INT AUTO_INCREMENT PRIMARY KEY,
@@ -127,8 +146,26 @@ async function autoMigrate() {
         created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
-      )
     `);
+    
+    // Prune duplicate active check-ins (keeping only the oldest) to clean up database state
+    try {
+      const [pruned] = await db.execute(`
+        DELETE e1 FROM entry_logs e1
+        INNER JOIN entry_logs e2 
+        ON e1.entity_type = e2.entity_type 
+        AND e1.entity_id = e2.entity_id 
+        AND e1.exit_time IS NULL 
+        AND e2.exit_time IS NULL
+        AND e1.id > e2.id
+      `);
+      if (pruned.affectedRows > 0) {
+        console.log(`[Auto-Migration] Cleaned up ${pruned.affectedRows} duplicate checked-in entry_logs!`);
+      }
+    } catch (e) {
+      console.warn('⚠️  Auto-migration duplicate log prune warning:', e.message);
+    }
+
     console.log('✅ Auto-migration complete: push_subscriptions + emergency_contacts tables ready.');
   } catch (err) {
     // Migration fail hone par sirf log karein, server band mat karein
