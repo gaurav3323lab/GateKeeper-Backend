@@ -1,12 +1,24 @@
 const webpush = require('web-push');
 const db = require('../config/db');
 
-// VAPID configuration — once at module load
-webpush.setVapidDetails(
-  process.env.VAPID_EMAIL || 'mailto:admin@gatekeeper.app',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+// ── VAPID Safe Init ───────────────────────────────────────────
+// Agar Hostinger par VAPID keys set nahi hain, server crash na ho
+// Push silently disabled ho jayega — baaki sab normal chalega
+let pushEnabled = false;
+try {
+  const pub = process.env.VAPID_PUBLIC_KEY;
+  const priv = process.env.VAPID_PRIVATE_KEY;
+  const email = process.env.VAPID_EMAIL || 'mailto:admin@gatekeeper.app';
+  if (pub && priv) {
+    webpush.setVapidDetails(email, pub, priv);
+    pushEnabled = true;
+    console.log('[Push] VAPID initialized successfully ✅');
+  } else {
+    console.warn('[Push] VAPID keys missing — push notifications disabled. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env');
+  }
+} catch (err) {
+  console.error('[Push] VAPID init failed — push notifications disabled:', err.message);
+}
 
 /**
  * Send push notification to a specific user by their user_id
@@ -16,6 +28,7 @@ webpush.setVapidDetails(
  * @param {object} data  — extra data sent to SW (e.g. url to open)
  */
 async function sendPushToUser(userId, title, body, data = {}) {
+  if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
       'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?',
@@ -54,6 +67,7 @@ async function sendPushToUser(userId, title, body, data = {}) {
  * @param {object} data
  */
 async function sendPushToRole(role, title, body, data = {}) {
+  if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
       `SELECT ps.endpoint, ps.p256dh, ps.auth
@@ -94,6 +108,7 @@ async function sendPushToRole(role, title, body, data = {}) {
  * @param {object} data
  */
 async function sendPushToSociety(societyId, title, body, data = {}) {
+  if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
       `SELECT ps.endpoint, ps.p256dh, ps.auth
@@ -134,6 +149,7 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
  * @param {object} data
  */
 async function sendPushToFlat(flatNumber, title, body, data = {}) {
+  if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
       `SELECT ps.endpoint, ps.p256dh, ps.auth

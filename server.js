@@ -98,7 +98,46 @@ app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/ads', require('./routes/ads'));
 app.use('/api/push', require('./routes/push'));
 
+// ── Auto-Migration on Startup ─────────────────────────────────
+// Nayi tables automatically create ho jayengi agar exist nahi karti
+// Hostinger par manual migration ki zaroorat nahi padegi
+const db = require('./config/db');
+async function autoMigrate() {
+  try {
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id         INT AUTO_INCREMENT PRIMARY KEY,
+        user_id    INT  NOT NULL,
+        endpoint   TEXT NOT NULL,
+        p256dh     TEXT NOT NULL,
+        auth       TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_endpoint (endpoint(500)),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS emergency_contacts (
+        id         INT AUTO_INCREMENT PRIMARY KEY,
+        society_id INT NOT NULL,
+        name       VARCHAR(100) NOT NULL,
+        phone      VARCHAR(20)  NOT NULL,
+        category   VARCHAR(50)  NOT NULL DEFAULT 'Other',
+        priority   INT          NOT NULL DEFAULT 5,
+        created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+      )
+    `);
+    console.log('✅ Auto-migration complete: push_subscriptions + emergency_contacts tables ready.');
+  } catch (err) {
+    // Migration fail hone par sirf log karein, server band mat karein
+    console.error('⚠️  Auto-migration warning (non-fatal):', err.message);
+  }
+}
+
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  await autoMigrate();
 });
