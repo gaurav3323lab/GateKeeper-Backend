@@ -6,16 +6,14 @@ const db = require('../config/db');
 // Push silently disabled ho jayega — baaki sab normal chalega
 let pushEnabled = false;
 try {
-  const pub = process.env.VAPID_PUBLIC_KEY;
-  const priv = process.env.VAPID_PRIVATE_KEY;
+  // Bulletproof fallback so it works instantly on Hostinger even without manual env vars configuration
+  const pub = process.env.VAPID_PUBLIC_KEY || 'BMK5njcYYX9a_oCtRrwogHtGMHkLc0ZpwJEv-rFMVh7agKIoWD3IXStaW_Ui77-gYz-hs_fHwTx94HsEOXFbPTg';
+  const priv = process.env.VAPID_PRIVATE_KEY || 'FwyTQ5pMaNWFcAWUcGx6v0u1B1Hd3m07NYMj1zEd76E';
   const email = process.env.VAPID_EMAIL || 'mailto:admin@gatekeeper.app';
-  if (pub && priv) {
-    webpush.setVapidDetails(email, pub, priv);
-    pushEnabled = true;
-    console.log('[Push] VAPID initialized successfully ✅');
-  } else {
-    console.warn('[Push] VAPID keys missing — push notifications disabled. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env');
-  }
+  
+  webpush.setVapidDetails(email, pub, priv);
+  pushEnabled = true;
+  console.log('[Push] VAPID initialized successfully ✅ (using keys)');
 } catch (err) {
   console.error('[Push] VAPID init failed — push notifications disabled:', err.message);
 }

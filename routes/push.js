@@ -5,11 +5,8 @@ const { verifyToken } = require('../middlewares/auth');
 
 // GET /api/push/vapid-key — Frontend ko public VAPID key deta hai (no auth needed)
 router.get('/vapid-key', (req, res) => {
-  const key = process.env.VAPID_PUBLIC_KEY;
-  if (!key) {
-    // 503 = feature not configured (not a crash), frontend handles this gracefully
-    return res.status(503).json({ message: 'Push notifications not configured on this server', publicKey: null });
-  }
+  // Bulletproof fallback so it works instantly on Hostinger even without manual env vars configuration
+  const key = process.env.VAPID_PUBLIC_KEY || 'BMK5njcYYX9a_oCtRrwogHtGMHkLc0ZpwJEv-rFMVh7agKIoWD3IXStaW_Ui77-gYz-hs_fHwTx94HsEOXFbPTg';
   res.json({ publicKey: key });
 });
 
