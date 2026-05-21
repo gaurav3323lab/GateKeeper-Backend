@@ -6,7 +6,10 @@ const { verifyToken } = require('../middlewares/auth');
 // GET /api/push/vapid-key — Frontend ko public VAPID key deta hai (no auth needed)
 router.get('/vapid-key', (req, res) => {
   const key = process.env.VAPID_PUBLIC_KEY;
-  if (!key) return res.status(500).json({ message: 'VAPID not configured' });
+  if (!key) {
+    // 503 = feature not configured (not a crash), frontend handles this gracefully
+    return res.status(503).json({ message: 'Push notifications not configured on this server', publicKey: null });
+  }
   res.json({ publicKey: key });
 });
 
