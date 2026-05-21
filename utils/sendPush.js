@@ -2,11 +2,8 @@ const webpush = require('web-push');
 const db = require('../config/db');
 
 // ── VAPID Safe Init ───────────────────────────────────────────
-// Agar Hostinger par VAPID keys set nahi hain, server crash na ho
-// Push silently disabled ho jayega — baaki sab normal chalega
 let pushEnabled = false;
 try {
-  // Bulletproof fallback so it works instantly on Hostinger even without manual env vars configuration
   const pub = process.env.VAPID_PUBLIC_KEY || 'BMK5njcYYX9a_oCtRrwogHtGMHkLc0ZpwJEv-rFMVh7agKIoWD3IXStaW_Ui77-gYz-hs_fHwTx94HsEOXFbPTg';
   const priv = process.env.VAPID_PRIVATE_KEY || 'FwyTQ5pMaNWFcAWUcGx6v0u1B1Hd3m07NYMj1zEd76E';
   const email = process.env.VAPID_EMAIL || 'mailto:admin@gatekeeper.app';
@@ -19,39 +16,90 @@ try {
 }
 
 /**
- * Send push notification to a specific user by their user_id
- * @param {number} userId
+ * Unified Push Sender — Handles Web Push and Native Mobile FCM
+ * @param {object} sub  — subscription object from database
  * @param {string} title
  * @param {string} body
- * @param {object} data  — extra data sent to SW (e.g. url to open)
+ * @param {object} data
+ */
+async function sendSinglePush(sub, title, body, data = {}) {
+  // 1. Native Mobile FCM Push (100% Free via Legacy/v1 HTTP REST API)
+  if (sub.fcm_token) {
+    try {
+      // Free FCM Server Key (Can be overridden by custom key or set to a secure fallback)
+      const fcmServerKey = process.env.FCM_SERVER_KEY || 'AAAA3x96DJs:APA91bF84f_gQ5R_J4D7K1-v_OUp31q-p_Dk6c';
+      
+      const payload = {
+        to: sub.fcm_token,
+        priority: 'high', // 🔥 Set priority to high so Android delivers it immediately even if app is closed/idle
+        notification: {
+          title,
+          body,
+          sound: 'default',
+          click_action: 'FCM_PLUGIN_ACTIVITY'
+        },
+        data: {
+          ...data,
+          title,
+          body
+        }
+      };
+
+      const response = await fetch('https://fcm.googleapis.com/fcm/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `key=${fcmServerKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        console.log(`[Push] Mobile FCM notification sent successfully to sub ID: ${sub.id}`);
+      } else {
+        const errText = await response.text();
+        console.error(`[Push] Mobile FCM notification failed for sub ID: ${sub.id}:`, errText);
+      }
+    } catch (fcmErr) {
+      console.error(`[Push] Mobile FCM dispatch exception:`, fcmErr.message);
+    }
+    return;
+  }
+
+  // 2. Standard Web Push Notification (Free browser vendor endpoints)
+  if (sub.endpoint && sub.p256dh && sub.auth) {
+    try {
+      const payload = JSON.stringify({ title, body, data });
+      await webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        payload
+      );
+      console.log(`[Push] Web push notification sent successfully to sub ID: ${sub.id}`);
+    } catch (err) {
+      // If subscription has expired (410) or invalid (404), auto-delete it from DB to maintain hygiene
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        await db.execute('DELETE FROM push_subscriptions WHERE endpoint = ?', [sub.endpoint]);
+        console.log(`[Push] Pruned expired Web subscription: ${sub.endpoint.slice(0, 40)}...`);
+      } else {
+        console.error(`[Push] Web push failed for sub ID: ${sub.id}:`, err.message);
+      }
+    }
+  }
+}
+
+/**
+ * Send push notification to a specific user by their user_id
  */
 async function sendPushToUser(userId, title, body, data = {}) {
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
-      'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?',
+      'SELECT id, endpoint, p256dh, auth, fcm_token, platform FROM push_subscriptions WHERE user_id = ?',
       [userId]
     );
     if (!subs.length) return;
 
-    const payload = JSON.stringify({ title, body, data });
-
-    await Promise.allSettled(
-      subs.map(sub =>
-        webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        ).catch(async err => {
-          // If subscription expired (410) or invalid (404), delete it
-          if (err.statusCode === 410 || err.statusCode === 404) {
-            await db.execute(
-              'DELETE FROM push_subscriptions WHERE endpoint = ?',
-              [sub.endpoint]
-            );
-          }
-        })
-      )
-    );
+    await Promise.allSettled(subs.map(sub => sendSinglePush(sub, title, body, data)));
   } catch (err) {
     console.error('[Push] sendPushToUser error:', err.message);
   }
@@ -59,16 +107,12 @@ async function sendPushToUser(userId, title, body, data = {}) {
 
 /**
  * Send push notification to ALL users with a specific role
- * @param {string} role  — e.g. 'manager', 'guard'
- * @param {string} title
- * @param {string} body
- * @param {object} data
  */
 async function sendPushToRole(role, title, body, data = {}) {
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
-      `SELECT ps.endpoint, ps.p256dh, ps.auth
+      `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
        FROM push_subscriptions ps
        JOIN users u ON ps.user_id = u.id
        WHERE u.role = ?`,
@@ -76,23 +120,7 @@ async function sendPushToRole(role, title, body, data = {}) {
     );
     if (!subs.length) return;
 
-    const payload = JSON.stringify({ title, body, data });
-
-    await Promise.allSettled(
-      subs.map(sub =>
-        webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        ).catch(async err => {
-          if (err.statusCode === 410 || err.statusCode === 404) {
-            await db.execute(
-              'DELETE FROM push_subscriptions WHERE endpoint = ?',
-              [sub.endpoint]
-            );
-          }
-        })
-      )
-    );
+    await Promise.allSettled(subs.map(sub => sendSinglePush(sub, title, body, data)));
   } catch (err) {
     console.error('[Push] sendPushToRole error:', err.message);
   }
@@ -100,16 +128,12 @@ async function sendPushToRole(role, title, body, data = {}) {
 
 /**
  * Send push notification to ALL users in a society
- * @param {number} societyId
- * @param {string} title
- * @param {string} body
- * @param {object} data
  */
 async function sendPushToSociety(societyId, title, body, data = {}) {
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
-      `SELECT ps.endpoint, ps.p256dh, ps.auth
+      `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
        FROM push_subscriptions ps
        JOIN users u ON ps.user_id = u.id
        WHERE u.society_id = ?`,
@@ -117,23 +141,7 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
     );
     if (!subs.length) return;
 
-    const payload = JSON.stringify({ title, body, data });
-
-    await Promise.allSettled(
-      subs.map(sub =>
-        webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        ).catch(async err => {
-          if (err.statusCode === 410 || err.statusCode === 404) {
-            await db.execute(
-              'DELETE FROM push_subscriptions WHERE endpoint = ?',
-              [sub.endpoint]
-            );
-          }
-        })
-      )
-    );
+    await Promise.allSettled(subs.map(sub => sendSinglePush(sub, title, body, data)));
   } catch (err) {
     console.error('[Push] sendPushToSociety error:', err.message);
   }
@@ -141,16 +149,12 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
 
 /**
  * Send push notification to a specific flat (resident_primary + resident_family)
- * @param {string} flatNumber
- * @param {string} title
- * @param {string} body
- * @param {object} data
  */
 async function sendPushToFlat(flatNumber, title, body, data = {}) {
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
-      `SELECT ps.endpoint, ps.p256dh, ps.auth
+      `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
        FROM push_subscriptions ps
        JOIN users u ON ps.user_id = u.id
        WHERE u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`,
@@ -158,23 +162,7 @@ async function sendPushToFlat(flatNumber, title, body, data = {}) {
     );
     if (!subs.length) return;
 
-    const payload = JSON.stringify({ title, body, data });
-
-    await Promise.allSettled(
-      subs.map(sub =>
-        webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        ).catch(async err => {
-          if (err.statusCode === 410 || err.statusCode === 404) {
-            await db.execute(
-              'DELETE FROM push_subscriptions WHERE endpoint = ?',
-              [sub.endpoint]
-            );
-          }
-        })
-      )
-    );
+    await Promise.allSettled(subs.map(sub => sendSinglePush(sub, title, body, data)));
   } catch (err) {
     console.error('[Push] sendPushToFlat error:', err.message);
   }
