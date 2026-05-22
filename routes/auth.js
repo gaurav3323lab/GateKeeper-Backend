@@ -52,7 +52,12 @@ router.post('/login', async (req, res) => {
   const { phone, password } = req.body; // Mock OTP using password
 
   try {
-    const [users] = await db.execute(`SELECT * FROM users WHERE phone = ?`, [phone]);
+    const [users] = await db.execute(`
+      SELECT u.*, s.name AS society_name, s.address AS society_address, s.city AS society_city 
+      FROM users u
+      LEFT JOIN societies s ON u.society_id = s.id
+      WHERE u.phone = ?
+    `, [phone]);
     
     if (users.length === 0) {
       return res.status(404).json({ message: 'User not found' });
@@ -89,7 +94,10 @@ router.post('/login', async (req, res) => {
         name: user.name,
         role: user.role,
         flat_number: user.flat_number,
-        society_id: user.society_id
+        society_id: user.society_id,
+        society_name: user.society_name,
+        society_address: user.society_address,
+        society_city: user.society_city
       }
     });
 
@@ -102,7 +110,13 @@ router.post('/login', async (req, res) => {
 // GET /profile
 router.get('/profile', verifyToken, async (req, res) => {
   try {
-    const [users] = await db.execute('SELECT id, name, phone, role, flat_number, created_at FROM users WHERE id = ?', [req.user.id]);
+    const [users] = await db.execute(`
+      SELECT u.id, u.name, u.phone, u.role, u.flat_number, u.society_id, u.created_at,
+             s.name AS society_name, s.address AS society_address, s.city AS society_city
+      FROM users u
+      LEFT JOIN societies s ON u.society_id = s.id
+      WHERE u.id = ?
+    `, [req.user.id]);
     if (users.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json(users[0]);
   } catch (err) {
@@ -264,6 +278,17 @@ router.get('/run-migrations', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Migration failed', error: err.message });
+  }
+});
+
+// DEBUG DB ROUTE
+router.get('/debug-db', async (req, res) => {
+  try {
+    const [users] = await db.execute('SELECT id, name, phone, role, flat_number, society_id FROM users');
+    const [societies] = await db.execute('SELECT * FROM societies');
+    res.json({ users, societies });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
