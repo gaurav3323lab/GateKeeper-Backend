@@ -67,9 +67,9 @@ router.post('/sos', async (req, res) => {
 });
 
 // POST /api/entry/manual-log
-// Guard manually logs a visitor entry with full entry_logs recording
+// Guard manually logs a visitor entry with full details
 router.post('/manual-log', async (req, res) => {
-  const { visitor_name, visitor_phone, flat_number, purpose, guard_id } = req.body;
+  const { visitor_name, visitor_phone, flat_number, purpose, guard_id, vehicle_number } = req.body;
   if (!visitor_name || !flat_number) return res.status(400).json({ message: 'visitor_name and flat_number required' });
 
   try {
@@ -92,9 +92,9 @@ router.post('/manual-log', async (req, res) => {
 
     // 3. Insert into entry_logs table so it shows up in Resident's activity logs!
     await db.execute(
-      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)
-       VALUES ('guest', ?, NOW(), 'Gate 1', ?)`,
-      [guestId, guard_id || null]
+      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id, vehicle_number)
+       VALUES ('guest', ?, NOW(), 'Gate 1', ?, ?)`,
+      [guestId, guard_id || null, vehicle_number || null]
     );
 
     // 4. Emit real-time log event & check-in toast to Resident's flat room!
@@ -126,7 +126,7 @@ router.post('/manual-log', async (req, res) => {
 // POST /api/entry/log-preapproved
 // Guard logs check-in for preapproved guests or deliveries
 router.post('/log-preapproved', async (req, res) => {
-  const { entity_type, entity_id, guard_id } = req.body;
+  const { entity_type, entity_id, guard_id, vehicle_number } = req.body;
   if (!entity_type || !entity_id) return res.status(400).json({ message: 'entity_type and entity_id required' });
 
   try {
@@ -141,9 +141,9 @@ router.post('/log-preapproved', async (req, res) => {
 
     // 1. Insert into entry_logs table
     await db.execute(
-      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)
-       VALUES (?, ?, NOW(), 'Gate 1', ?)`,
-      [entity_type, entity_id, guard_id || null]
+      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id, vehicle_number)
+       VALUES (?, ?, NOW(), 'Gate 1', ?, ?)`,
+      [entity_type, entity_id, guard_id || null, vehicle_number || null]
     );
 
     // 2. If it is a delivery, update delivery status to 'arrived' or 'completed'
@@ -209,7 +209,7 @@ router.get('/logs', verifyToken, async (req, res) => {
 
     const [rows] = await db.execute(`
       SELECT 
-        el.id, el.entity_type, el.entry_time, el.exit_time, el.gate_number,
+        el.id, el.entity_type, el.entry_time, el.exit_time, el.gate_number, el.vehicle_number,
         CASE 
           WHEN el.entity_type = 'guest' THEN g.name
           WHEN el.entity_type = 'vehicle' THEN v.vehicle_number
@@ -256,7 +256,7 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
 
     // 2. Fetch Guests matching flat_number
     const [guests] = await db.execute(`
-      SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time
+      SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time, el.vehicle_number
       FROM guests g
       JOIN users u ON g.host_id = u.id
       LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
@@ -266,7 +266,7 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
 
     // 3. Fetch Vehicles matching flat_number
     const [vehicles] = await db.execute(`
-      SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at
+      SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at, el.vehicle_number
       FROM vehicles v
       JOIN users u ON v.user_id = u.id
       JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
@@ -276,9 +276,10 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
 
     // 4. Fetch Deliveries matching flat_number
     const [deliveries] = await db.execute(`
-      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, d.created_at as entry_time, NULL as exit_time
+      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, COALESCE(el.entry_time, d.created_at) as entry_time, el.exit_time, el.vehicle_number
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
+      LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
       WHERE u.flat_number = ?
       ORDER BY d.created_at DESC LIMIT 15
     `, [flatNumber]);
@@ -366,6 +367,8 @@ router.post('/pre-approve', verifyToken, async (req, res) => {
       if (valid_date) {
         if (valid_date.includes('T')) {
           validTo = valid_date.replace('T', ' ');
+        } else if (valid_date.includes(':')) {
+          validTo = valid_date;
         } else {
           validTo = `${valid_date} 23:59:59`;
         }

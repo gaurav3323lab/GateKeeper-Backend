@@ -151,11 +151,39 @@ router.get('/residents', async (req, res) => {
   try {
     const isSuperAdmin = req.user.role === 'super_admin';
     const query = isSuperAdmin
-      ? `SELECT id, name, phone, flat_number, role, account_status, created_at FROM users WHERE role IN ('resident_primary', 'resident_family') AND account_status = 'active' ORDER BY flat_number`
-      : `SELECT id, name, phone, flat_number, role, account_status, created_at FROM users WHERE role IN ('resident_primary', 'resident_family') AND account_status = 'active' AND society_id = ? ORDER BY flat_number`;
+      ? `SELECT u.id, u.name, u.phone, u.flat_number, u.role, u.account_status, u.created_at,
+                GROUP_CONCAT(CONCAT(v.vehicle_number, ':', v.type, ':', COALESCE(v.brand, '')) SEPARATOR '||') AS vehicles_str
+         FROM users u
+         LEFT JOIN vehicles v ON u.id = v.user_id
+         WHERE u.role IN ('resident_primary', 'resident_family') AND u.account_status = 'active'
+         GROUP BY u.id
+         ORDER BY u.flat_number`
+      : `SELECT u.id, u.name, u.phone, u.flat_number, u.role, u.account_status, u.created_at,
+                GROUP_CONCAT(CONCAT(v.vehicle_number, ':', v.type, ':', COALESCE(v.brand, '')) SEPARATOR '||') AS vehicles_str
+         FROM users u
+         LEFT JOIN vehicles v ON u.id = v.user_id
+         WHERE u.role IN ('resident_primary', 'resident_family') AND u.account_status = 'active' AND u.society_id = ?
+         GROUP BY u.id
+         ORDER BY u.flat_number`;
     const params = isSuperAdmin ? [] : [req.user.society_id];
     const [rows] = await db.execute(query, params);
-    res.json(rows);
+
+    const formatted = rows.map(r => {
+      const vehicles = [];
+      if (r.vehicles_str) {
+        const parts = r.vehicles_str.split('||');
+        parts.forEach(p => {
+          const [vehicle_number, type, brand] = p.split(':');
+          if (vehicle_number) {
+            vehicles.push({ vehicle_number, type, brand });
+          }
+        });
+      }
+      const { vehicles_str, ...rest } = r;
+      return { ...rest, vehicles };
+    });
+
+    res.json(formatted);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });

@@ -272,6 +272,11 @@ async function autoMigrate() {
       console.warn('⚠️  Auto-migration duplicate log prune warning:', e.message);
     }
 
+    try {
+      await db.execute('ALTER TABLE entry_logs ADD COLUMN vehicle_number VARCHAR(50) DEFAULT NULL');
+      console.log('✅ Auto-migration: Added vehicle_number column to entry_logs successfully.');
+    } catch (e) { /* ignore if already exists */ }
+
     console.log('✅ Auto-migration complete: push_subscriptions, emergency_contacts + community tables ready.');
   } catch (err) {
     // Migration fail hone par sirf log karein, server band mat karein
