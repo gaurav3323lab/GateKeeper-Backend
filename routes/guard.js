@@ -82,6 +82,34 @@ router.get('/verify-pin/:pin', async (req, res) => {
   }
 });
 
+// GET /api/guard/verify-vehicle/:plate
+// Look up vehicle details (owner name, flat number, current status: Inside/Outside) in the guard's society
+router.get('/verify-vehicle/:plate', async (req, res) => {
+  try {
+    const [guard] = await db.execute('SELECT society_id FROM users WHERE id = ?', [req.user.id]);
+    const societyId = guard[0]?.society_id || 1;
+    const plate = req.params.plate.replace(/[^A-Z0-9]/g, '').trim().toUpperCase();
+
+    const [rows] = await db.execute(`
+      SELECT v.id, v.vehicle_number, v.type, v.brand, v.status,
+             u.name AS owner_name, u.flat_number, u.phone
+      FROM vehicles v
+      JOIN users u ON v.user_id = u.id
+      WHERE REPLACE(v.vehicle_number, ' ', '') = ? AND u.society_id = ?
+      LIMIT 1
+    `, [plate, societyId]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Vehicle not registered' });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Verify vehicle error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 // ── GET Recent Entry Logs (last 50) ──────────────────────────────
 router.get('/entry-logs', async (req, res) => {
   try {

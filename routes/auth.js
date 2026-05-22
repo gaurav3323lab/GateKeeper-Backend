@@ -172,6 +172,61 @@ router.get('/setup-admin', async (req, res) => {
   }
 });
 
+// CLEAR DUMMY DATA ROUTE
+// Visit: /api/auth/clear-dummy-data to wipe all dummy data and reset Super Admin
+router.get('/clear-dummy-data', async (req, res) => {
+  try {
+    await db.execute('SET FOREIGN_KEY_CHECKS = 0');
+
+    const tablesToTruncate = [
+      'entry_logs',
+      'emergencies',
+      'guests',
+      'deliveries',
+      'vehicles',
+      'service_requests',
+      'announcements',
+      'push_subscriptions'
+    ];
+
+    let logs = [];
+    for (const table of tablesToTruncate) {
+      try {
+        await db.execute(`TRUNCATE TABLE ${table}`);
+        logs.push(`🧹 Cleared table: ${table}`);
+      } catch (err) {
+        await db.execute(`DELETE FROM ${table}`);
+        logs.push(`🧹 Deletions completed on table: ${table}`);
+      }
+    }
+
+    await db.execute('DELETE FROM users');
+    logs.push("🧹 Cleared users table.");
+
+    await db.execute(`
+      INSERT INTO societies (id, name, society_code, address, city, state, zip_code)
+      VALUES (1, 'Gaurav Heights', 'GH001', 'Sector 23', 'Mumbai', 'Maharashtra', '400001')
+      ON DUPLICATE KEY UPDATE name = name
+    `);
+    logs.push("🏢 Default society configured.");
+
+    const passwordHash = await bcrypt.hash('1234', 10);
+    await db.execute(`
+      INSERT INTO users (id, name, phone, password_hash, role, account_status, society_id)
+      VALUES (1, 'Super Admin', '9999999999', ?, 'super_admin', 'active', 1)
+    `, [passwordHash]);
+    logs.push("👑 Fresh Super Admin user created (Phone: 9999999999, Password: 1234).");
+
+    await db.execute('SET FOREIGN_KEY_CHECKS = 1');
+    logs.push("✅ Foreign key checks re-enabled.");
+
+    res.json({ message: '✨ Database cleanup complete! Real data ready.', logs });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Cleanup failed', error: err.message });
+  }
+});
+
 // RUN MIGRATIONS ROUTE
 // Visit: /api/auth/run-migrations to run tables setup
 router.get('/run-migrations', async (req, res) => {

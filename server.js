@@ -97,6 +97,7 @@ app.use('/api/guard', require('./routes/guard'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/ads', require('./routes/ads'));
 app.use('/api/push', require('./routes/push'));
+app.use('/api/community', require('./routes/community'));
 
 // ── Auto-Migration on Startup ─────────────────────────────────
 // Nayi tables automatically create ho jayengi agar exist nahi karti
@@ -146,7 +147,112 @@ async function autoMigrate() {
         created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+      )
     `);
+    
+    // Create new community tables
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS community_posts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        society_id INT NOT NULL,
+        author_id INT NOT NULL,
+        type VARCHAR(20) DEFAULT 'post',
+        title VARCHAR(255) NOT NULL,
+        body TEXT NULL,
+        poll_options TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE,
+        FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS community_likes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        post_id INT NOT NULL,
+        user_id INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_post_user (post_id, user_id),
+        FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS community_comments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        post_id INT NOT NULL,
+        author_id INT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS community_poll_votes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        post_id INT NOT NULL,
+        user_id INT NOT NULL,
+        selected_option VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_post_user_vote (post_id, user_id),
+        FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS home_chores (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        society_id INT NOT NULL,
+        flat_number VARCHAR(50) NOT NULL,
+        text VARCHAR(255) NOT NULL,
+        is_done BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Dynamic Seed: If community_posts is empty, insert the default active poll!
+    const [postsCount] = await db.execute('SELECT COUNT(*) AS cnt FROM community_posts');
+    if (postsCount[0].cnt === 0) {
+      const [users] = await db.execute('SELECT id, society_id FROM users LIMIT 1');
+      if (users.length > 0) {
+        const authorId = users[0].id;
+        const societyId = users[0].society_id || 1;
+        
+        const pollOptions = JSON.stringify([
+          "Owners Only",
+          "Tenants & Family Members",
+          "All registered flat members"
+        ]);
+        
+        const [pollResult] = await db.execute(`
+          INSERT INTO community_posts (society_id, author_id, type, title, body, poll_options)
+          VALUES (?, ?, 'poll', 'Who should be allowed to vote for social issues in society? 🗳️', 'Opinion poll regarding voting guidelines.', ?)
+        `, [societyId, authorId, pollOptions]);
+        
+        const pollPostId = pollResult.insertId;
+
+        await db.execute(`
+          INSERT INTO community_comments (post_id, author_id, text)
+          VALUES (?, ?, 'I have 3 passes left, let me know if you want them!')
+        `, [pollPostId, authorId]);
+
+        const [allUsers] = await db.execute('SELECT id FROM users LIMIT 10');
+        const options = ["Owners Only", "Tenants & Family Members", "All registered flat members"];
+        for (let i = 0; i < allUsers.length; i++) {
+          try {
+            await db.execute(`
+              INSERT INTO community_poll_votes (post_id, user_id, selected_option)
+              VALUES (?, ?, ?)
+            `, [pollPostId, allUsers[i].id, options[i % options.length]]);
+          } catch (e) {}
+        }
+      }
+    }
     
     // Prune duplicate active check-ins (keeping only the oldest) to clean up database state
     try {
@@ -166,7 +272,7 @@ async function autoMigrate() {
       console.warn('⚠️  Auto-migration duplicate log prune warning:', e.message);
     }
 
-    console.log('✅ Auto-migration complete: push_subscriptions + emergency_contacts tables ready.');
+    console.log('✅ Auto-migration complete: push_subscriptions, emergency_contacts + community tables ready.');
   } catch (err) {
     // Migration fail hone par sirf log karein, server band mat karein
     console.error('⚠️  Auto-migration warning (non-fatal):', err.message);
