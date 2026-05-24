@@ -150,15 +150,15 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
 /**
  * Send push notification to a specific flat (resident_primary + resident_family)
  */
-async function sendPushToFlat(flatNumber, title, body, data = {}) {
+async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
       `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
        FROM push_subscriptions ps
        JOIN users u ON ps.user_id = u.id
-       WHERE u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`,
-      [flatNumber]
+       WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`,
+      [tower || null, flatNumber]
     );
     if (!subs.length) return;
 

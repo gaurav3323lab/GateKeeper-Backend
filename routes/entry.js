@@ -15,7 +15,7 @@ router.post('/scan-plate', async (req, res) => {
     const worker = await createWorker('eng');
     await worker.setParameters({
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
-      tessedit_pageseg_mode: '7',
+      tessedit_pageseg_mode: '6',
     });
     const { data: { text, confidence } } = await worker.recognize(imageBase64);
     await worker.terminate();
@@ -29,7 +29,7 @@ router.post('/scan-plate', async (req, res) => {
 
 // POST /api/entry/sos
 router.post('/sos', async (req, res) => {
-  const { user_id, flat_number, user_name } = req.body;
+  const { user_id, tower, flat_number, user_name } = req.body;
   if (!user_id) return res.status(400).json({ message: 'user_id required' });
 
   try {
@@ -42,7 +42,8 @@ router.post('/sos', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.to('guard_room').to('manager_room').emit('sos_alert', {
-        message: `🚨 EMERGENCY SOS from Flat ${flat_number} — ${user_name}`,
+        message: `🚨 EMERGENCY SOS from Flat ${tower ? tower + '-' : ''}${flat_number} — ${user_name}`,
+        tower,
         flat_number,
         user_name,
         userId: user_id,
@@ -52,11 +53,12 @@ router.post('/sos', async (req, res) => {
 
     // 🔔 Web Push — Guards aur Managers ko OS notification bheji
     const pushTitle = `🚨 EMERGENCY SOS!`;
-    const pushBody = `Flat ${flat_number} se SOS alert — ${user_name}. Turant respond karein!`;
+    const pushBody = `Flat ${tower ? tower + '-' : ''}${flat_number} se SOS alert — ${user_name}. Turant respond karein!`;
+    const flatCombined = `${tower ? tower + '-' : ''}${flat_number}`;
     await Promise.all([
-      sendPushToRole('guard', pushTitle, pushBody, { url: '/', type: 'sos', flat_number }),
-      sendPushToRole('manager', pushTitle, pushBody, { url: '/', type: 'sos', flat_number }),
-      sendPushToRole('super_admin', pushTitle, pushBody, { url: '/', type: 'sos', flat_number }),
+      sendPushToRole('guard', pushTitle, pushBody, { url: '/', type: 'sos', flat_number: flatCombined }),
+      sendPushToRole('manager', pushTitle, pushBody, { url: '/', type: 'sos', flat_number: flatCombined }),
+      sendPushToRole('super_admin', pushTitle, pushBody, { url: '/', type: 'sos', flat_number: flatCombined }),
     ]);
 
     res.status(201).json({ message: 'SOS sent successfully', id: result.insertId });
@@ -69,14 +71,14 @@ router.post('/sos', async (req, res) => {
 // POST /api/entry/manual-log
 // Guard manually logs a visitor entry with full details
 router.post('/manual-log', async (req, res) => {
-  const { visitor_name, visitor_phone, flat_number, purpose, guard_id, vehicle_number } = req.body;
+  const { visitor_name, visitor_phone, tower, flat_number, purpose, guard_id, vehicle_number } = req.body;
   if (!visitor_name || !flat_number) return res.status(400).json({ message: 'visitor_name and flat_number required' });
 
   try {
-    // 1. Find resident host_id matching the flat number (roles primary/family)
+    // 1. Find resident host_id matching the tower and flat number (roles primary/family)
     const [users] = await db.execute(
-      `SELECT id FROM users WHERE flat_number = ? AND role IN ('resident_primary', 'resident_family') LIMIT 1`,
-      [flat_number]
+      `SELECT id FROM users WHERE COALESCE(tower, '') = COALESCE(?, '') AND flat_number = ? AND role IN ('resident_primary', 'resident_family') LIMIT 1`,
+      [tower || null, flat_number]
     );
     
     const hostId = users.length > 0 ? users[0].id : null;
@@ -100,8 +102,9 @@ router.post('/manual-log', async (req, res) => {
     // 4. Emit real-time log event & check-in toast to Resident's flat room!
     const io = req.app.get('io');
     if (io && flat_number) {
-      io.to(`flat_${flat_number}`).emit('entry_log_created');
-      io.to(`flat_${flat_number}`).emit('visitor_checked_in', {
+      const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+      io.to(roomName).emit('entry_log_created');
+      io.to(roomName).emit('visitor_checked_in', {
         visitor_name: visitor_name
       });
     }
@@ -109,6 +112,7 @@ router.post('/manual-log', async (req, res) => {
     // 🔔 Web Push — Resident ko visitor entry notification
     if (flat_number) {
       await sendPushToFlat(
+        tower,
         flat_number,
         `🚪 Visitor Aaya!`,
         `${visitor_name} gate par aaye hain. Purpose: ${purpose || 'Walk-in'}`,
@@ -155,20 +159,23 @@ router.post('/log-preapproved', async (req, res) => {
     }
 
     // 3. Query flat_number and visitor name to emit socket to the target resident's flat room!
+    let tower = '';
     let flat_number = '';
     let visitor_name = 'Visitor';
     if (entity_type === 'guest') {
       const [rows] = await db.execute(
-        `SELECT u.flat_number, g.name FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
+        `SELECT u.tower, u.flat_number, g.name FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
         [entity_id]
       );
+      tower = rows[0]?.tower || '';
       flat_number = rows[0]?.flat_number || '';
       visitor_name = rows[0]?.name || 'Guest';
     } else if (entity_type === 'delivery') {
       const [rows] = await db.execute(
-        `SELECT u.flat_number, d.company FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
+        `SELECT u.tower, u.flat_number, d.company FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
         [entity_id]
       );
+      tower = rows[0]?.tower || '';
       flat_number = rows[0]?.flat_number || '';
       visitor_name = rows[0]?.company || 'Delivery';
     }
@@ -176,14 +183,16 @@ router.post('/log-preapproved', async (req, res) => {
     if (flat_number) {
       const io = req.app.get('io');
       if (io) {
-        io.to(`flat_${flat_number}`).emit('entry_log_created');
-        io.to(`flat_${flat_number}`).emit('visitor_checked_in', {
+        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        io.to(roomName).emit('entry_log_created');
+        io.to(roomName).emit('visitor_checked_in', {
           visitor_name: visitor_name
         });
       }
 
       // 🔔 Web Push — Resident ko pre-approved entry notification
       await sendPushToFlat(
+        tower,
         flat_number,
         entity_type === 'delivery' ? `📦 Delivery Aayi!` : `✅ Visitor Checked In`,
         `${visitor_name} society mein enter kar gaye hain.`,
@@ -217,6 +226,11 @@ router.get('/logs', verifyToken, async (req, res) => {
           ELSE 'Unknown'
         END AS entity_name,
         CASE 
+          WHEN el.entity_type = 'guest' THEN ug.tower
+          WHEN el.entity_type = 'vehicle' THEN uv.tower
+          ELSE NULL
+        END AS tower,
+        CASE 
           WHEN el.entity_type = 'guest' THEN ug.flat_number
           WHEN el.entity_type = 'vehicle' THEN uv.flat_number
           ELSE 'N/A'
@@ -246,43 +260,44 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
     
-    // 1. Fetch flat_number for the logged-in user
-    const [userRows] = await db.execute('SELECT flat_number FROM users WHERE id = ?', [userId]);
+    // 1. Fetch tower and flat_number for the logged-in user
+    const [userRows] = await db.execute('SELECT tower, flat_number FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower;
     const flatNumber = userRows[0]?.flat_number;
 
     if (!flatNumber) {
       return res.json([]);
     }
 
-    // 2. Fetch Guests matching flat_number
+    // 2. Fetch Guests matching tower and flat_number
     const [guests] = await db.execute(`
       SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time, el.vehicle_number
       FROM guests g
       JOIN users u ON g.host_id = u.id
       LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
-      WHERE u.flat_number = ?
+      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
       ORDER BY g.created_at DESC LIMIT 15
-    `, [flatNumber]);
+    `, [tower, flatNumber]);
 
-    // 3. Fetch Vehicles matching flat_number
+    // 3. Fetch Vehicles matching tower and flat_number
     const [vehicles] = await db.execute(`
       SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at, el.vehicle_number
       FROM vehicles v
       JOIN users u ON v.user_id = u.id
       JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
-      WHERE u.flat_number = ?
+      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
       ORDER BY el.entry_time DESC LIMIT 15
-    `, [flatNumber]);
+    `, [tower, flatNumber]);
 
-    // 4. Fetch Deliveries matching flat_number
+    // 4. Fetch Deliveries matching tower and flat_number
     const [deliveries] = await db.execute(`
       SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, COALESCE(el.entry_time, d.created_at) as entry_time, el.exit_time, el.vehicle_number
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
       LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
-      WHERE u.flat_number = ?
+      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
       ORDER BY d.created_at DESC LIMIT 15
-    `, [flatNumber]);
+    `, [tower, flatNumber]);
 
     // Combine and sort by newest first
     const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
@@ -303,7 +318,7 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
 router.get('/emergencies', async (req, res) => {
   try {
     const [rows] = await db.execute(`
-      SELECT e.*, u.name AS user_name, u.flat_number, u.phone
+      SELECT e.*, u.name AS user_name, u.tower, u.flat_number, u.phone
       FROM emergencies e
       JOIN users u ON e.user_id = u.id
       ORDER BY e.created_at DESC
@@ -388,10 +403,12 @@ router.post('/pre-approve', verifyToken, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       // Get user flat
-      const [user] = await db.execute('SELECT flat_number FROM users WHERE id = ?', [userId]);
+      const [user] = await db.execute('SELECT tower, flat_number FROM users WHERE id = ?', [userId]);
+      const tower = user[0]?.tower || '';
       const flat = user[0]?.flat_number || '';
+      const flatCombined = `${tower ? tower + '-' : ''}${flat}`;
       io.to('guard_room').emit('new_pre_approval', {
-        message: `Naya Pre-Approval Aaya Hai: Flat ${flat} se ${type === 'delivery' ? company : name} ke liye.`,
+        message: `Naya Pre-Approval Aaya Hai: Flat ${flatCombined} se ${type === 'delivery' ? company : name} ke liye.`,
         type
       });
     }
@@ -426,9 +443,9 @@ router.get('/society-contacts', verifyToken, async (req, res) => {
     const [userRows] = await db.execute('SELECT society_id FROM users WHERE id = ?', [userId]);
     const societyId = userRows[0]?.society_id || 1;
 
-    // Fetch active guards for this society
+    // Fetch active guards for this society, including their live online status
     const [guards] = await db.execute(`
-      SELECT name, phone FROM users
+      SELECT id, name, phone, is_online FROM users
       WHERE role = 'guard' AND society_id = ? AND account_status = 'active'
     `, [societyId]);
 

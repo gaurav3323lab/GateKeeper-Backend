@@ -39,9 +39,21 @@ io.on('connection', (socket) => {
   console.log(`[Socket] User connected: ${socket.id}`);
 
   // Join role-based rooms
-  socket.on('join_room', (data) => {
+  socket.on('join_room', async (data) => {
     socket.join(data.room);
     console.log(`[Socket] ${socket.id} joined room: ${data.room}`);
+    
+    if (data.room === 'guard_room' && data.userId) {
+      socket.userId = data.userId;
+      socket.role = 'guard';
+      try {
+        await db.execute('UPDATE users SET is_online = TRUE WHERE id = ?', [data.userId]);
+        console.log(`[Socket] Guard ${data.userId} is now ONLINE`);
+        io.emit('guards_status_update');
+      } catch (err) {
+        console.error('Failed to mark guard online:', err.message);
+      }
+    }
   });
 
   // SOS Emergency — Resident triggers
@@ -68,8 +80,17 @@ io.on('connection', (socket) => {
     io.to('guard_room').emit('visitor_decision_result', data);
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`[Socket] User disconnected: ${socket.id}`);
+    if (socket.role === 'guard' && socket.userId) {
+      try {
+        await db.execute('UPDATE users SET is_online = FALSE WHERE id = ?', [socket.userId]);
+        console.log(`[Socket] Guard ${socket.userId} is now OFFLINE`);
+        io.emit('guards_status_update');
+      } catch (err) {
+        console.error('Failed to mark guard offline:', err.message);
+      }
+    }
   });
 });
 
@@ -105,6 +126,22 @@ app.use('/api/community', require('./routes/community'));
 const db = require('./config/db');
 async function autoMigrate() {
   try {
+    // Add tower columns safely
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN tower VARCHAR(50) DEFAULT NULL AFTER society_id');
+      console.log('✅ Auto-migration: Added tower column to users successfully.');
+    } catch (e) { /* ignore if already exists */ }
+
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN is_online BOOLEAN DEFAULT FALSE AFTER role');
+      console.log('✅ Auto-migration: Added is_online column to users successfully.');
+    } catch (e) { /* ignore if already exists */ }
+
+    try {
+      await db.execute('ALTER TABLE home_chores ADD COLUMN tower VARCHAR(50) DEFAULT NULL AFTER society_id');
+      console.log('✅ Auto-migration: Added tower column to home_chores successfully.');
+    } catch (e) { /* ignore if already exists */ }
+
     await db.execute(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id         INT AUTO_INCREMENT PRIMARY KEY,

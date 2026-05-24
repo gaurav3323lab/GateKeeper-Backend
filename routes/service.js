@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
 router.get('/all', async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT sr.*, u.name AS resident_name, u.flat_number, t.name AS technician_name
+      `SELECT sr.*, u.name AS resident_name, u.tower, u.flat_number, t.name AS technician_name
        FROM service_requests sr
        JOIN users u ON sr.user_id = u.id
        LEFT JOIN users t ON sr.assigned_technician_id = t.id

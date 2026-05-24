@@ -27,13 +27,14 @@ router.post('/approve-resident', async (req, res) => {
 
     // ✅ Emit socket notification to the resident's flat
     const [residentRows] = await db.execute(
-      `SELECT flat_number, name FROM users WHERE id = ?`, [userId]
+      `SELECT tower, flat_number, name FROM users WHERE id = ?`, [userId]
     );
     if (residentRows.length > 0) {
       const io = req.app.get('io');
-      const { flat_number, name } = residentRows[0];
+      const { tower, flat_number, name } = residentRows[0];
       if (io && flat_number) {
-        io.to(`flat_${flat_number}`).emit('account_status_update', {
+        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        io.to(roomName).emit('account_status_update', {
           status,
           message: status === 'active'
             ? `Aapka account approve ho gaya! Ab aap login kar sakte hain.`
@@ -135,8 +136,8 @@ router.get('/pending-residents', async (req, res) => {
     // super_admin sees all, others see only their society
     const isSuperAdmin = req.user.role === 'super_admin';
     const query = isSuperAdmin
-      ? `SELECT id, name, phone, flat_number, created_at FROM users WHERE account_status = 'pending' ORDER BY created_at DESC`
-      : `SELECT id, name, phone, flat_number, created_at FROM users WHERE account_status = 'pending' AND society_id = ? ORDER BY created_at DESC`;
+      ? `SELECT id, name, phone, tower, flat_number, created_at FROM users WHERE account_status = 'pending' ORDER BY created_at DESC`
+      : `SELECT id, name, phone, tower, flat_number, created_at FROM users WHERE account_status = 'pending' AND society_id = ? ORDER BY created_at DESC`;
     const params = isSuperAdmin ? [] : [req.user.society_id];
     const [users] = await db.execute(query, params);
     res.json(users);
@@ -151,20 +152,20 @@ router.get('/residents', async (req, res) => {
   try {
     const isSuperAdmin = req.user.role === 'super_admin';
     const query = isSuperAdmin
-      ? `SELECT u.id, u.name, u.phone, u.flat_number, u.role, u.account_status, u.created_at,
+      ? `SELECT u.id, u.name, u.phone, u.tower, u.flat_number, u.role, u.account_status, u.created_at,
                 GROUP_CONCAT(CONCAT(v.vehicle_number, ':', v.type, ':', COALESCE(v.brand, '')) SEPARATOR '||') AS vehicles_str
          FROM users u
          LEFT JOIN vehicles v ON u.id = v.user_id
          WHERE u.role IN ('resident_primary', 'resident_family') AND u.account_status = 'active'
          GROUP BY u.id
-         ORDER BY u.flat_number`
-      : `SELECT u.id, u.name, u.phone, u.flat_number, u.role, u.account_status, u.created_at,
+         ORDER BY u.tower, u.flat_number`
+      : `SELECT u.id, u.name, u.phone, u.tower, u.flat_number, u.role, u.account_status, u.created_at,
                 GROUP_CONCAT(CONCAT(v.vehicle_number, ':', v.type, ':', COALESCE(v.brand, '')) SEPARATOR '||') AS vehicles_str
          FROM users u
          LEFT JOIN vehicles v ON u.id = v.user_id
          WHERE u.role IN ('resident_primary', 'resident_family') AND u.account_status = 'active' AND u.society_id = ?
          GROUP BY u.id
-         ORDER BY u.flat_number`;
+         ORDER BY u.tower, u.flat_number`;
     const params = isSuperAdmin ? [] : [req.user.society_id];
     const [rows] = await db.execute(query, params);
 

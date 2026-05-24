@@ -29,7 +29,7 @@ router.get('/pre-approved', async (req, res) => {
 
     const [guests] = await db.execute(`
       SELECT g.id, 'guest' AS type, g.name, g.phone AS phone, g.purpose, g.valid_to AS valid_date,
-        u.flat_number AS flat, u.name AS resident_name, g.qr_code
+        u.tower AS tower, u.flat_number AS flat, u.name AS resident_name, g.qr_code
       FROM guests g
       JOIN users u ON g.host_id = u.id
       WHERE g.valid_to >= DATE_SUB(NOW(), INTERVAL 3 DAY) 
@@ -40,7 +40,7 @@ router.get('/pre-approved', async (req, res) => {
 
     const [deliveries] = await db.execute(`
       SELECT d.id, 'delivery' AS type, d.company AS name, 'Delivery' AS purpose, d.phone AS phone, d.created_at AS valid_date,
-        u.flat_number AS flat, u.name AS resident_name, NULL AS qr_code
+        u.tower AS tower, u.flat_number AS flat, u.name AS resident_name, NULL AS qr_code
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
       WHERE (d.status = 'pending' OR d.status = 'approved') 
@@ -64,7 +64,7 @@ router.get('/verify-pin/:pin', async (req, res) => {
     const pin = req.params.pin;
     const [rows] = await db.execute(`
       SELECT g.id, 'guest' AS type, g.name, g.phone AS phone, g.purpose, g.valid_to AS valid_date,
-             u.flat_number AS flat, u.name AS resident_name, g.qr_code
+             u.tower AS tower, u.flat_number AS flat, u.name AS resident_name, g.qr_code
       FROM guests g
       JOIN users u ON g.host_id = u.id
       WHERE TRIM(g.qr_code) = ? AND g.valid_to >= DATE_SUB(NOW(), INTERVAL 3 DAY)
@@ -92,7 +92,7 @@ router.get('/verify-vehicle/:plate', async (req, res) => {
 
     const [rows] = await db.execute(`
       SELECT v.id, v.vehicle_number, v.type, v.brand, v.status,
-             u.name AS owner_name, u.flat_number, u.phone
+             u.name AS owner_name, u.tower, u.flat_number, u.phone
       FROM vehicles v
       JOIN users u ON v.user_id = u.id
       WHERE REPLACE(v.vehicle_number, ' ', '') = ? AND u.society_id = ?
@@ -149,7 +149,7 @@ router.get('/emergencies', async (req, res) => {
     const societyId = guard[0].society_id;
 
     const [rows] = await db.execute(`
-      SELECT e.*, u.name AS user_name, u.flat_number, u.phone
+      SELECT e.*, u.name AS user_name, u.tower, u.flat_number, u.phone
       FROM emergencies e JOIN users u ON e.user_id = u.id
       WHERE e.status = 'Active' AND u.society_id = ?
       ORDER BY e.created_at DESC
@@ -181,7 +181,7 @@ router.get('/vehicle-stats', async (req, res) => {
     const [vehicles] = await db.execute(`
       SELECT 
         v.id, v.vehicle_number, v.type, v.brand, v.status, v.created_at,
-        u.name AS owner_name, u.flat_number, u.phone
+        u.name AS owner_name, u.tower, u.flat_number, u.phone
       FROM vehicles v
       JOIN users u ON v.user_id = u.id
       WHERE u.society_id = ?
@@ -193,7 +193,7 @@ router.get('/vehicle-stats', async (req, res) => {
       SELECT 
         el.id, el.entry_time, el.exit_time, el.gate_number,
         v.vehicle_number, v.type, v.brand,
-        u.name AS owner_name, u.flat_number
+        u.name AS owner_name, u.tower, u.flat_number
       FROM entry_logs el
       JOIN vehicles v ON el.entity_id = v.id
       JOIN users u ON v.user_id = u.id
@@ -231,7 +231,7 @@ router.get('/inside-visitors', async (req, res) => {
           WHEN el.entity_type = 'delivery' THEN d.phone
           ELSE 'N/A'
         END AS phone,
-        u.flat_number AS flat, u.name AS resident_name
+        u.tower AS tower, u.flat_number AS flat, u.name AS resident_name
       FROM entry_logs el
       LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
       LEFT JOIN deliveries d ON el.entity_type = 'delivery' AND el.entity_id = d.id
@@ -267,7 +267,7 @@ router.post('/checkout-visitor', async (req, res) => {
           WHEN el.entity_type = 'delivery' THEN d.company
           ELSE 'Visitor'
         END AS name,
-        u.flat_number
+        u.tower, u.flat_number
       FROM entry_logs el
       LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
       LEFT JOIN deliveries d ON el.entity_type = 'delivery' AND el.entity_id = d.id
@@ -276,11 +276,12 @@ router.post('/checkout-visitor', async (req, res) => {
     `, [log_id]);
 
     if (rows.length > 0) {
-      const { name, flat_number } = rows[0];
+      const { name, tower, flat_number } = rows[0];
       const io = req.app.get('io');
       if (io && flat_number) {
-        io.to(`flat_${flat_number}`).emit('entry_log_created');
-        io.to(`flat_${flat_number}`).emit('visitor_checked_out', {
+        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        io.to(roomName).emit('entry_log_created');
+        io.to(roomName).emit('visitor_checked_out', {
           visitor_name: name
         });
       }
@@ -288,6 +289,7 @@ router.post('/checkout-visitor', async (req, res) => {
       // 🔔 Web Push — Resident ko checkout notification
       if (flat_number) {
         await sendPushToFlat(
+          tower,
           flat_number,
           `🚶 Visitor Chale Gaye`,
           `${name} society se bahar nikal gaye hain.`,
@@ -312,7 +314,7 @@ router.post('/vehicle-log', async (req, res) => {
   try {
     // Fetch vehicle and owner info
     const [vehicleRows] = await db.execute(
-      `SELECT v.vehicle_number, v.type, v.brand, u.id AS owner_id, u.flat_number, u.name AS owner_name
+      `SELECT v.vehicle_number, v.type, v.brand, u.id AS owner_id, u.tower, u.flat_number, u.name AS owner_name
        FROM vehicles v JOIN users u ON v.user_id = u.id
        WHERE v.id = ?`,
       [vehicle_id]
@@ -331,7 +333,10 @@ router.post('/vehicle-log', async (req, res) => {
 
       // Socket broadcast
       const io = req.app.get('io');
-      if (io) io.to(`flat_${vehicle.flat_number}`).emit('entry_log_created');
+      if (io) {
+        const roomName = `flat_${vehicle.tower ? vehicle.tower + '-' : ''}${vehicle.flat_number}`;
+        io.to(roomName).emit('entry_log_created');
+      }
 
       // 🔔 Web Push — Vehicle owner ko ENTRY notification
       await sendPushToUser(
@@ -355,7 +360,10 @@ router.post('/vehicle-log', async (req, res) => {
 
       // Socket broadcast
       const io = req.app.get('io');
-      if (io) io.to(`flat_${vehicle.flat_number}`).emit('entry_log_created');
+      if (io) {
+        const roomName = `flat_${vehicle.tower ? vehicle.tower + '-' : ''}${vehicle.flat_number}`;
+        io.to(roomName).emit('entry_log_created');
+      }
 
       // 🔔 Web Push — Vehicle owner ko EXIT notification
       await sendPushToUser(

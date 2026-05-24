@@ -165,9 +165,9 @@ router.post('/create-staff', async (req, res) => {
 router.get('/residents', async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT id, name, phone, flat_number, role, account_status, created_at FROM users
+      `SELECT id, name, phone, tower, flat_number, role, account_status, created_at FROM users
        WHERE role IN ('resident_primary', 'resident_family') AND society_id = ?
-       ORDER BY flat_number`,
+       ORDER BY tower, flat_number`,
       [req.user.society_id]
     );
     res.json(rows);
@@ -209,7 +209,7 @@ router.get('/entry-logs', async (req, res) => {
 router.get('/pending-residents', async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT id, name, phone, flat_number, created_at FROM users 
+      `SELECT id, name, phone, tower, flat_number, created_at FROM users 
        WHERE account_status = 'pending' AND society_id = ? ORDER BY created_at DESC`,
       [req.user.society_id]
     );
@@ -231,9 +231,11 @@ router.post('/approve-resident', async (req, res) => {
     );
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Resident not found in your society' });
     const io = req.app.get('io');
-    const [residentRows] = await db.execute(`SELECT flat_number, name FROM users WHERE id = ?`, [userId]);
+    const [residentRows] = await db.execute(`SELECT tower, flat_number, name FROM users WHERE id = ?`, [userId]);
     if (residentRows.length > 0 && io) {
-      io.to(`flat_${residentRows[0].flat_number}`).emit('account_status_update', { status, name: residentRows[0].name });
+      const { tower, flat_number, name } = residentRows[0];
+      const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+      io.to(roomName).emit('account_status_update', { status, name });
     }
     res.json({ message: `Resident ${status}` });
   } catch (err) {

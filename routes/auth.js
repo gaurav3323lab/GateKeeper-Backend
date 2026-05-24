@@ -7,7 +7,7 @@ const { verifyToken } = require('../middlewares/auth');
 
 // Registration Route (Sets account_status to pending)
 router.post('/register', async (req, res) => {
-  const { name, phone, password, flat_number, society_id, role = 'resident_primary' } = req.body;
+  const { name, phone, password, tower, flat_number, society_id, role = 'resident_primary' } = req.body;
 
   try {
     // Basic validation
@@ -20,8 +20,8 @@ router.post('/register', async (req, res) => {
 
     // Insert user with status 'pending'
     const [result] = await db.execute(
-      `INSERT INTO users (name, phone, password_hash, role, account_status, flat_number, society_id) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      [name, phone, password_hash, role, flat_number || null, society_id]
+      `INSERT INTO users (name, phone, password_hash, role, account_status, tower, flat_number, society_id) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      [name, phone, password_hash, role, tower || null, flat_number || null, society_id]
     );
 
     // Emit event to managers
@@ -29,6 +29,7 @@ router.post('/register', async (req, res) => {
     io.to('manager_room').emit('new_approval_request', {
       id: result.insertId,
       name,
+      tower,
       flat_number,
       phone
     });
@@ -81,7 +82,7 @@ router.post('/login', async (req, res) => {
 
     // Generate JWT — includes society_id for role-based isolation
     const token = jwt.sign(
-      { id: user.id, role: user.role, flat_number: user.flat_number, society_id: user.society_id }, 
+      { id: user.id, role: user.role, tower: user.tower, flat_number: user.flat_number, society_id: user.society_id }, 
       process.env.JWT_SECRET || 'secret_key',
       { expiresIn: '30d' }
     );
@@ -93,6 +94,7 @@ router.post('/login', async (req, res) => {
         id: user.id,
         name: user.name,
         role: user.role,
+        tower: user.tower,
         flat_number: user.flat_number,
         society_id: user.society_id,
         society_name: user.society_name,
@@ -111,7 +113,7 @@ router.post('/login', async (req, res) => {
 router.get('/profile', verifyToken, async (req, res) => {
   try {
     const [users] = await db.execute(`
-      SELECT u.id, u.name, u.phone, u.role, u.flat_number, u.society_id, u.created_at,
+      SELECT u.id, u.name, u.phone, u.role, u.tower, u.flat_number, u.society_id, u.created_at,
              s.name AS society_name, s.address AS society_address, s.city AS society_city
       FROM users u
       LEFT JOIN societies s ON u.society_id = s.id

@@ -10,7 +10,7 @@ router.use(verifyToken);
 router.get('/', async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT id, name, phone, role, flat_number, created_at FROM users WHERE parent_id = ?`,
+      `SELECT id, name, phone, role, tower, flat_number, created_at FROM users WHERE parent_id = ?`,
       [req.user.id]
     );
     res.json(rows);
@@ -26,9 +26,9 @@ router.post('/', async (req, res) => {
   try {
     const password_hash = await bcrypt.hash(password, 10);
     const [result] = await db.execute(
-      `INSERT INTO users (name, phone, password_hash, role, account_status, flat_number, parent_id)
-       VALUES (?, ?, ?, 'resident_family', 'active', ?, ?)`,
-      [name, phone, password_hash, req.user.flat_number, req.user.id]
+      `INSERT INTO users (name, phone, password_hash, role, account_status, tower, flat_number, parent_id, society_id)
+       VALUES (?, ?, ?, 'resident_family', 'active', ?, ?, ?, ?)`,
+      [name, phone, password_hash, req.user.tower || null, req.user.flat_number || null, req.user.id, req.user.society_id || null]
     );
     res.status(201).json({ message: 'Family member add ho gaye', id: result.insertId });
   } catch (err) {

@@ -8,13 +8,14 @@ router.get('/posts', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
     // Get user's society and flat
-    const [userRows] = await db.execute('SELECT flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const [userRows] = await db.execute('SELECT tower, flat_number, society_id FROM users WHERE id = ?', [userId]);
     const societyId = userRows[0]?.society_id || 1;
+    const tower = userRows[0]?.tower || '';
     const flatNumber = userRows[0]?.flat_number || '';
 
     // Fetch all community posts/polls in the resident's society
     const [posts] = await db.execute(`
-      SELECT cp.*, u.name AS author_name, u.role AS author_role, u.flat_number AS author_flat
+      SELECT cp.*, u.name AS author_name, u.role AS author_role, u.tower AS author_tower, u.flat_number AS author_flat
       FROM community_posts cp
       JOIN users u ON cp.author_id = u.id
       WHERE cp.society_id = ?
@@ -57,9 +58,9 @@ router.get('/posts', verifyToken, async (req, res) => {
         // Check if anyone from the user's flat has voted on this poll (1 vote per flat rule)
         const [myFlatVote] = await db.execute(`
           SELECT selected_option FROM community_poll_votes 
-          WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE flat_number = ? AND society_id = ?)
+          WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE COALESCE(tower, '') = COALESCE(?, '') AND flat_number = ? AND society_id = ?)
           LIMIT 1
-        `, [post.id, flatNumber, societyId]);
+        `, [post.id, tower, flatNumber, societyId]);
         
         const votedOption = myFlatVote[0]?.selected_option || null;
 
@@ -98,6 +99,7 @@ router.get('/posts', verifyToken, async (req, res) => {
         timeAgo,
         author_name: post.author_name,
         author_role: post.author_role,
+        author_tower: post.author_tower,
         author_flat: post.author_flat,
         likesCount: likesCount[0].cnt,
         likedByMe: likedByMeRows.length > 0,
@@ -193,15 +195,16 @@ router.post('/posts/:id/vote', verifyToken, async (req, res) => {
 
   try {
     const userId = req.user.id;
-    const [userRows] = await db.execute('SELECT flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const [userRows] = await db.execute('SELECT tower, flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower || '';
     const flatNumber = userRows[0]?.flat_number || '';
     const societyId = userRows[0]?.society_id || 1;
 
     // Check if any resident from the same flat has voted already
     const [existing] = await db.execute(`
       SELECT id FROM community_poll_votes 
-      WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE flat_number = ? AND society_id = ?)
-    `, [postId, flatNumber, societyId]);
+      WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE COALESCE(tower, '') = COALESCE(?, '') AND flat_number = ? AND society_id = ?)
+    `, [postId, tower, flatNumber, societyId]);
 
     if (existing.length > 0) {
       return res.status(400).json({ message: 'A vote has already been registered for your flat!' });
@@ -223,15 +226,16 @@ router.post('/posts/:id/vote', verifyToken, async (req, res) => {
 router.get('/chores', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const [userRows] = await db.execute('SELECT flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const [userRows] = await db.execute('SELECT tower, flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower;
     const flatNumber = userRows[0]?.flat_number;
     const societyId = userRows[0]?.society_id || 1;
 
     if (!flatNumber) return res.json([]);
 
     const [chores] = await db.execute(
-      'SELECT id, text, is_done FROM home_chores WHERE flat_number = ? AND society_id = ? ORDER BY created_at ASC',
-      [flatNumber, societyId]
+      'SELECT id, text, is_done FROM home_chores WHERE COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ? ORDER BY created_at ASC',
+      [tower, flatNumber, societyId]
     );
     // Map is_done to boolean
     const result = chores.map(c => ({
@@ -254,15 +258,16 @@ router.post('/chores', verifyToken, async (req, res) => {
 
   try {
     const userId = req.user.id;
-    const [userRows] = await db.execute('SELECT flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const [userRows] = await db.execute('SELECT tower, flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower;
     const flatNumber = userRows[0]?.flat_number;
     const societyId = userRows[0]?.society_id || 1;
 
     if (!flatNumber) return res.status(400).json({ message: 'User does not belong to a flat' });
 
     const [result] = await db.execute(
-      'INSERT INTO home_chores (society_id, flat_number, text) VALUES (?, ?, ?)',
-      [societyId, flatNumber, text]
+      'INSERT INTO home_chores (society_id, tower, flat_number, text) VALUES (?, ?, ?, ?)',
+      [societyId, tower || null, flatNumber, text]
     );
     res.status(201).json({ id: result.insertId, text, done: false });
   } catch (err) {
@@ -276,12 +281,13 @@ router.put('/chores/:id/toggle', verifyToken, async (req, res) => {
   const choreId = req.params.id;
   try {
     const userId = req.user.id;
-    const [userRows] = await db.execute('SELECT flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const [userRows] = await db.execute('SELECT tower, flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower;
     const flatNumber = userRows[0]?.flat_number;
     const societyId = userRows[0]?.society_id || 1;
 
     // Confirm chore belongs to user's flat
-    const [chore] = await db.execute('SELECT is_done FROM home_chores WHERE id = ? AND flat_number = ? AND society_id = ?', [choreId, flatNumber, societyId]);
+    const [chore] = await db.execute('SELECT is_done FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
     if (chore.length === 0) {
       return res.status(404).json({ message: 'Chore not found or unauthorized' });
     }
@@ -300,11 +306,12 @@ router.delete('/chores/:id', verifyToken, async (req, res) => {
   const choreId = req.params.id;
   try {
     const userId = req.user.id;
-    const [userRows] = await db.execute('SELECT flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const [userRows] = await db.execute('SELECT tower, flat_number, society_id FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower;
     const flatNumber = userRows[0]?.flat_number;
     const societyId = userRows[0]?.society_id || 1;
 
-    const [result] = await db.execute('DELETE FROM home_chores WHERE id = ? AND flat_number = ? AND society_id = ?', [choreId, flatNumber, societyId]);
+    const [result] = await db.execute('DELETE FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Chore not found or unauthorized' });
     }
@@ -381,9 +388,9 @@ router.get('/directory', verifyToken, async (req, res) => {
 
     // 1. Fetch active residents for this society
     const [residents] = await db.execute(`
-      SELECT name, role, flat_number, phone FROM users
+      SELECT name, role, tower, flat_number, phone FROM users
       WHERE role IN ('resident_primary', 'resident_family') AND society_id = ? AND account_status = 'active'
-      ORDER BY flat_number ASC, name ASC
+      ORDER BY tower ASC, flat_number ASC, name ASC
     `, [societyId]);
 
     // 2. Fetch security guards for this society
@@ -413,6 +420,7 @@ router.get('/directory', verifyToken, async (req, res) => {
       directory.push({
         name: r.name,
         role: 'Resident',
+        tower: r.tower || '',
         flat_number: r.flat_number || '--',
         phone: r.phone,
         category: 'Residents'
