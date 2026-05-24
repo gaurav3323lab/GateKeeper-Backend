@@ -11,9 +11,12 @@ router.get('/', async (req, res) => {
       SELECT s.id, s.name, s.society_code, s.city, s.state, s.zip_code, s.address, s.created_at,
         COUNT(DISTINCT CASE WHEN u.role IN ('resident_primary','resident_family') AND u.account_status='active' THEN u.id END) AS residents,
         COUNT(DISTINCT CASE WHEN u.role = 'guard' THEN u.id END) AS guards,
-        COUNT(DISTINCT CASE WHEN u.role = 'manager' THEN u.id END) AS managers
+        COUNT(DISTINCT CASE WHEN u.role = 'manager' THEN u.id END) AS managers,
+        COUNT(DISTINCT v.id) AS vehicles,
+        (SELECT COUNT(*) FROM entry_logs el JOIN users gu ON el.guard_id = gu.id WHERE gu.society_id = s.id AND DATE(el.entry_time) = CURDATE()) AS today_entries
       FROM societies s
       LEFT JOIN users u ON u.society_id = s.id
+      LEFT JOIN vehicles v ON v.user_id = u.id
       GROUP BY s.id
       ORDER BY s.created_at DESC
     `);

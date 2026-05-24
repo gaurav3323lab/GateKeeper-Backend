@@ -65,6 +65,48 @@ router.get('/system-status', async (req, res) => {
   }
 });
 
+// ── GET Global Residents + Vehicles for Super Admin ──────────
+router.get('/global-residents', async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT 
+        u.id, u.name, u.phone, u.tower, u.flat_number, u.account_status, u.role,
+        s.name AS society_name, s.city,
+        GROUP_CONCAT(DISTINCT v.vehicle_number ORDER BY v.created_at SEPARATOR ', ') AS vehicles,
+        COUNT(DISTINCT v.id) AS vehicle_count
+      FROM users u
+      LEFT JOIN societies s ON u.society_id = s.id
+      LEFT JOIN vehicles v ON v.user_id = u.id
+      WHERE u.role IN ('resident_primary', 'resident_family') AND u.account_status = 'active'
+      GROUP BY u.id, s.name, s.city
+      ORDER BY s.name, u.tower, u.flat_number
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Global residents error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// ── GET Global Guards/Staff for Super Admin ───────────────────
+router.get('/global-staff', async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT 
+        u.id, u.name, u.phone, u.role, u.is_online, u.account_status, u.created_at,
+        s.name AS society_name, s.city
+      FROM users u
+      LEFT JOIN societies s ON u.society_id = s.id
+      WHERE u.role IN ('guard', 'technician', 'manager')
+      ORDER BY u.role, s.name, u.name
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Global staff error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 // ── GET Admin Dashboard Stats ────────────────────────────────
 router.get('/dashboard', async (req, res) => {
   try {
@@ -315,4 +357,171 @@ router.get('/emergency-contacts', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// SOCIETY ADMIN MANAGEMENT — Super Admin Only
+// ══════════════════════════════════════════════════════════════
+
+// ── GET All Society Admins ─────────────────────────────────────
+router.get('/admins', async (req, res) => {
+  // Both super_admin and admin can list; admin sees only their own record
+  try {
+    const isSuperAdmin = req.user.role === 'super_admin';
+    const query = isSuperAdmin
+      ? `SELECT u.id, u.name, u.phone, u.account_status, u.created_at, s.id AS society_id, s.name AS society_name, s.city
+         FROM users u
+         LEFT JOIN societies s ON u.society_id = s.id
+         WHERE u.role = 'admin'
+         ORDER BY s.name, u.name`
+      : `SELECT u.id, u.name, u.phone, u.account_status, u.created_at, s.id AS society_id, s.name AS society_name, s.city
+         FROM users u
+         LEFT JOIN societies s ON u.society_id = s.id
+         WHERE u.role = 'admin' AND u.society_id = ?
+         ORDER BY u.name`;
+    const params = isSuperAdmin ? [] : [req.user.society_id];
+    const [rows] = await db.execute(query, params);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// ── POST Create Society Admin (super_admin only) ───────────────
+router.post('/create-admin', async (req, res) => {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ message: 'Only Super Admin can create Society Admins.' });
+  }
+  const { name, phone, password, society_id } = req.body;
+  if (!name || !phone || !society_id) {
+    return res.status(400).json({ message: 'Name, phone, and society_id are required.' });
+  }
+  try {
+    const pwd = password || '123456';
+    const password_hash = await bcrypt.hash(pwd, 10);
+    const [result] = await db.execute(
+      `INSERT INTO users (name, phone, password_hash, role, account_status, society_id)
+       VALUES (?, ?, ?, 'admin', 'active', ?)`,
+      [name, phone, password_hash, society_id]
+    );
+    res.status(201).json({ message: 'Society Admin created successfully', userId: result.insertId });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'Phone number already registered.' });
+    console.error(err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// ── DELETE Society Admin (super_admin only) ────────────────────
+router.delete('/admins/:id', async (req, res) => {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ message: 'Only Super Admin can delete Society Admins.' });
+  }
+  try {
+    const [result] = await db.execute(
+      `DELETE FROM users WHERE id = ? AND role = 'admin'`,
+      [req.params.id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Admin not found.' });
+    res.json({ message: 'Society Admin removed successfully.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// ── GET Society Admin's own dashboard stats ────────────────────
+router.get('/admin-dashboard', async (req, res) => {
+  try {
+    const societyId = req.user.society_id;
+    const [[societyRow]] = await db.execute(
+      `SELECT s.id, s.name, s.society_code, s.city, s.address,
+        COUNT(DISTINCT CASE WHEN u.role IN ('resident_primary','resident_family') AND u.account_status='active' THEN u.id END) AS residents,
+        COUNT(DISTINCT CASE WHEN u.role = 'guard' THEN u.id END) AS guards,
+        COUNT(DISTINCT CASE WHEN u.role = 'manager' THEN u.id END) AS managers,
+        COUNT(DISTINCT CASE WHEN u.role = 'technician' THEN u.id END) AS technicians,
+        COUNT(DISTINCT CASE WHEN u.account_status = 'pending' THEN u.id END) AS pending_approvals
+      FROM societies s
+      LEFT JOIN users u ON u.society_id = s.id
+      WHERE s.id = ?
+      GROUP BY s.id`,
+      [societyId]
+    );
+
+    const [[entryRow]] = await db.execute(
+      `SELECT COUNT(*) AS today_entries
+       FROM entry_logs el
+       JOIN users gu ON el.guard_id = gu.id
+       WHERE gu.society_id = ? AND DATE(el.entry_time) = CURDATE()`,
+      [societyId]
+    );
+
+    const [managers] = await db.execute(
+      `SELECT id, name, phone, account_status, created_at FROM users
+       WHERE role = 'manager' AND society_id = ? ORDER BY name`,
+      [societyId]
+    );
+
+    const [guards] = await db.execute(
+      `SELECT id, name, phone, role, is_online, account_status FROM users
+       WHERE role IN ('guard','technician') AND society_id = ? ORDER BY name`,
+      [societyId]
+    );
+
+    const [pendingResidents] = await db.execute(
+      `SELECT id, name, phone, tower, flat_number, created_at FROM users
+       WHERE account_status = 'pending' AND society_id = ? ORDER BY created_at DESC`,
+      [societyId]
+    );
+
+    const [residents] = await db.execute(
+      `SELECT u.id, u.name, u.phone, u.tower, u.flat_number, u.role, u.account_status,
+              GROUP_CONCAT(v.vehicle_number SEPARATOR ', ') AS vehicles
+       FROM users u
+       LEFT JOIN vehicles v ON v.user_id = u.id
+       WHERE u.role IN ('resident_primary','resident_family') AND u.account_status='active' AND u.society_id = ?
+       GROUP BY u.id
+       ORDER BY u.tower, u.flat_number`,
+      [societyId]
+    );
+
+    const [recentLogs] = await db.execute(
+      `SELECT el.id, el.entity_type, el.entry_time, el.exit_time, el.gate_number,
+         CASE
+           WHEN el.entity_type = 'vehicle' THEN v.vehicle_number
+           WHEN el.entity_type = 'guest' THEN g.name
+           ELSE 'Unknown'
+         END AS entity_name,
+         gu.name AS guard_name
+       FROM entry_logs el
+       LEFT JOIN vehicles v ON el.entity_type='vehicle' AND el.entity_id=v.id
+       LEFT JOIN guests g ON el.entity_type='guest' AND el.entity_id=g.id
+       JOIN users gu ON el.guard_id = gu.id
+       WHERE gu.society_id = ?
+       ORDER BY el.entry_time DESC LIMIT 50`,
+      [societyId]
+    );
+
+    res.json({
+      society: societyRow || {},
+      stats: {
+        residents: societyRow?.residents || 0,
+        guards: societyRow?.guards || 0,
+        managers: societyRow?.managers || 0,
+        technicians: societyRow?.technicians || 0,
+        pending_approvals: societyRow?.pending_approvals || 0,
+        today_entries: entryRow?.today_entries || 0,
+      },
+      managers,
+      guards,
+      pendingResidents,
+      residents,
+      recentLogs,
+    });
+  } catch (err) {
+    console.error('Admin dashboard error:', err);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 module.exports = router;
+
