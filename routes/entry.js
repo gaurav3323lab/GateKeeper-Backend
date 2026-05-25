@@ -4,6 +4,7 @@ const { createWorker } = require('tesseract.js');
 const db = require('../config/db');
 const { verifyToken } = require('../middlewares/auth');
 const { sendPushToUser, sendPushToRole, sendPushToFlat } = require('../utils/sendPush');
+const { cleanAndCorrectPlate } = require('../utils/anprHelper');
 
 let ocrWorker = null;
 
@@ -24,8 +25,12 @@ router.post('/scan-plate', async (req, res) => {
       console.log('[ANPR] Tesseract worker pre-warmed successfully ✅');
     }
     const { data: { text, confidence } } = await ocrWorker.recognize(imageBase64);
-    const cleaned = text.replace(/[^A-Z0-9 ]/g, '').trim();
-    res.json({ text: cleaned, confidence: Math.round(confidence) });
+    
+    // Auto-heal common OCR recognition errors and layout-format the Indian license plate
+    const parsed = cleanAndCorrectPlate(text);
+    console.log(`[ANPR] Scanned Raw: "${text.replace(/\n/g, ' ').trim()}" -> Auto-Healed: "${parsed.formatted}" (Confidence: ${Math.round(confidence)}%)`);
+    
+    res.json({ text: parsed.formatted, confidence: Math.round(confidence) });
   } catch (err) {
     console.error('OCR Error:', err.message);
     // If worker fails/crashes, reset it so the next request spins up a fresh one
