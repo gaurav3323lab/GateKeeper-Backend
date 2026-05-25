@@ -393,11 +393,11 @@ router.get('/directory', verifyToken, async (req, res) => {
       ORDER BY tower ASC, flat_number ASC, name ASC
     `, [societyId]);
 
-    // 2. Fetch security guards for this society
-    const [guards] = await db.execute(`
+    // 2. Fetch security guards, technicians and managers for this society
+    const [staffUsers] = await db.execute(`
       SELECT name, role, phone FROM users
-      WHERE role = 'guard' AND society_id = ? AND account_status = 'active'
-      ORDER BY name ASC
+      WHERE role IN ('guard', 'technician', 'manager') AND society_id = ? AND account_status = 'active'
+      ORDER BY role ASC, name ASC
     `, [societyId]);
 
     // 3. Fetch staff / daily help members
@@ -427,11 +427,20 @@ router.get('/directory', verifyToken, async (req, res) => {
       });
     });
 
-    guards.forEach(g => {
+    staffUsers.forEach(g => {
+      let roleLabel = 'Guard';
+      let flatNum = 'Security Cabin 🛡️';
+      if (g.role === 'technician') {
+        roleLabel = 'Technician';
+        flatNum = 'Support Desk 🔧';
+      } else if (g.role === 'manager') {
+        roleLabel = 'Manager';
+        flatNum = 'Admin Office 🏢';
+      }
       directory.push({
         name: g.name,
-        role: 'Guard',
-        flat_number: 'Security Cabin 🛡️',
+        role: roleLabel,
+        flat_number: flatNum,
         phone: g.phone,
         category: 'Security'
       });
