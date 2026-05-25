@@ -5,6 +5,8 @@ const db = require('../config/db');
 const { verifyToken } = require('../middlewares/auth');
 const { sendPushToUser, sendPushToRole, sendPushToFlat } = require('../utils/sendPush');
 
+let ocrWorker = null;
+
 // POST /api/entry/scan-plate
 // Accepts: { imageBase64: "data:image/jpeg;base64,..." }
 router.post('/scan-plate', async (req, res) => {
@@ -12,17 +14,25 @@ router.post('/scan-plate', async (req, res) => {
   if (!imageBase64) return res.status(400).json({ message: 'Image data required' });
 
   try {
-    const worker = await createWorker('eng');
-    await worker.setParameters({
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
-      tessedit_pageseg_mode: '6',
-    });
-    const { data: { text, confidence } } = await worker.recognize(imageBase64);
-    await worker.terminate();
+    if (!ocrWorker) {
+      console.log('[ANPR] Pre-warming new singleton Tesseract worker...');
+      ocrWorker = await createWorker('eng');
+      await ocrWorker.setParameters({
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
+        tessedit_pageseg_mode: '6',
+      });
+      console.log('[ANPR] Tesseract worker pre-warmed successfully ✅');
+    }
+    const { data: { text, confidence } } = await ocrWorker.recognize(imageBase64);
     const cleaned = text.replace(/[^A-Z0-9 ]/g, '').trim();
     res.json({ text: cleaned, confidence: Math.round(confidence) });
   } catch (err) {
     console.error('OCR Error:', err.message);
+    // If worker fails/crashes, reset it so the next request spins up a fresh one
+    if (ocrWorker) {
+      try { await ocrWorker.terminate(); } catch (e) {}
+      ocrWorker = null;
+    }
     res.status(500).json({ message: 'OCR processing failed', error: err.message });
   }
 });

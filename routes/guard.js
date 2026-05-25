@@ -90,14 +90,37 @@ router.get('/verify-vehicle/:plate', async (req, res) => {
     const societyId = guard[0]?.society_id || 1;
     const plate = req.params.plate.replace(/[^A-Z0-9]/g, '').trim().toUpperCase();
 
-    const [rows] = await db.execute(`
+    // Stage 1: Stripped and Normalized Exact Match (ignoring spaces, dashes, hyphens, dots)
+    let [rows] = await db.execute(`
       SELECT v.id, v.vehicle_number, v.type, v.brand, v.status,
              u.name AS owner_name, u.tower, u.flat_number, u.phone
       FROM vehicles v
       JOIN users u ON v.user_id = u.id
-      WHERE REPLACE(v.vehicle_number, ' ', '') = ? AND u.society_id = ?
+      WHERE REPLACE(REPLACE(REPLACE(v.vehicle_number, ' ', ''), '-', ''), '.', '') = ? AND u.society_id = ?
       LIMIT 1
     `, [plate, societyId]);
+
+    // Stage 2: Smart OCR Error Recovery (Suffix Fallback Match)
+    // If the exact query yields 0 rows, we extract the last 4 characters. If they are 4 digits (common for vehicle numbers),
+    // we query the database using standard suffix matching. If only 1 vehicle in the society matches, we automatically resolve it!
+    if (rows.length === 0 && plate.length >= 4) {
+      const lastFour = plate.slice(-4);
+      if (/^\d{4}$/.test(lastFour)) { // Exact 4 digits
+        const [fallbackRows] = await db.execute(`
+          SELECT v.id, v.vehicle_number, v.type, v.brand, v.status,
+                 u.name AS owner_name, u.tower, u.flat_number, u.phone
+          FROM vehicles v
+          JOIN users u ON v.user_id = u.id
+          WHERE REPLACE(REPLACE(REPLACE(v.vehicle_number, ' ', ''), '-', ''), '.', '') LIKE CONCAT('%', ?) AND u.society_id = ?
+        `, [lastFour, societyId]);
+
+        // Auto-heal typical OCR typos only if exactly 1 matching plate is registered in the society
+        if (fallbackRows.length === 1) {
+          console.log(`[ANPR] Suffix Auto-Heal Triggered: Resolved noisy plate '${plate}' to registered vehicle '${fallbackRows[0].vehicle_number}'`);
+          rows = fallbackRows;
+        }
+      }
+    }
 
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Vehicle not registered' });
