@@ -174,6 +174,22 @@ async function autoMigrate() {
     } catch (e) { /* ignore if column already exists */ }
 
     await db.execute(`
+      CREATE TABLE IF NOT EXISTS society_settings (
+        society_id        INT PRIMARY KEY,
+        anpr              BOOLEAN NOT NULL DEFAULT TRUE,
+        preapproved       BOOLEAN NOT NULL DEFAULT TRUE,
+        manual            BOOLEAN NOT NULL DEFAULT TRUE,
+        vehicles          BOOLEAN NOT NULL DEFAULT TRUE,
+        checkout          BOOLEAN NOT NULL DEFAULT TRUE,
+        sos               BOOLEAN NOT NULL DEFAULT TRUE,
+        vehicle_mandatory BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.execute(`
       CREATE TABLE IF NOT EXISTS emergency_contacts (
         id         INT AUTO_INCREMENT PRIMARY KEY,
         society_id INT NOT NULL,

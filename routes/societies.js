@@ -109,4 +109,66 @@ router.delete('/:id', verifyToken, authorizeRoles(roles.SUPER_ADMIN), async (req
   }
 });
 
+// GET society settings
+router.get('/:societyId/settings', verifyToken, async (req, res) => {
+  const { societyId } = req.params;
+  try {
+    const [rows] = await db.query('SELECT * FROM society_settings WHERE society_id = ?', [societyId]);
+    if (rows.length === 0) {
+      // Return default settings
+      return res.json({
+        society_id: parseInt(societyId),
+        anpr: true,
+        preapproved: true,
+        manual: true,
+        vehicles: true,
+        checkout: true,
+        sos: true,
+        vehicle_mandatory: false
+      });
+    }
+    // Convert 0/1 to boolean
+    const settings = {
+      society_id: rows[0].society_id,
+      anpr: !!rows[0].anpr,
+      preapproved: !!rows[0].preapproved,
+      manual: !!rows[0].manual,
+      vehicles: !!rows[0].vehicles,
+      checkout: !!rows[0].checkout,
+      sos: !!rows[0].sos,
+      vehicle_mandatory: !!rows[0].vehicle_mandatory
+    };
+    res.json(settings);
+  } catch (error) {
+    console.error('Error fetching society settings:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// UPDATE society settings
+router.put('/:societyId/settings', verifyToken, async (req, res) => {
+  const { societyId } = req.params;
+  const { anpr, preapproved, manual, vehicles, checkout, sos, vehicle_mandatory } = req.body;
+  try {
+    // Insert if not exists, else update
+    await db.query(`
+      INSERT INTO society_settings (society_id, anpr, preapproved, manual, vehicles, checkout, sos, vehicle_mandatory)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE 
+        anpr = VALUES(anpr),
+        preapproved = VALUES(preapproved),
+        manual = VALUES(manual),
+        vehicles = VALUES(vehicles),
+        checkout = VALUES(checkout),
+        sos = VALUES(sos),
+        vehicle_mandatory = VALUES(vehicle_mandatory)
+    `, [societyId, anpr ?? true, preapproved ?? true, manual ?? true, vehicles ?? true, checkout ?? true, sos ?? true, vehicle_mandatory ?? false]);
+    
+    res.json({ message: 'Society settings updated successfully' });
+  } catch (error) {
+    console.error('Error updating society settings:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;
