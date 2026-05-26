@@ -294,6 +294,19 @@ router.get('/debug-db', async (req, res) => {
   }
 });
 
+// DEBUG LOGS ROUTE
+router.get('/debug-logs', async (req, res) => {
+  try {
+    const [guests] = await db.execute('SELECT * FROM guests LIMIT 50');
+    const [deliveries] = await db.execute('SELECT * FROM deliveries LIMIT 50');
+    const [entryLogs] = await db.execute('SELECT * FROM entry_logs LIMIT 50');
+    const [vehicles] = await db.execute('SELECT * FROM vehicles LIMIT 50');
+    res.json({ guests, deliveries, entryLogs, vehicles });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // HEAL DATABASE ROUTE
 // Visit: /api/auth/heal-db to manually auto-heal the remote MySQL database schemas
 router.get('/heal-db', async (req, res) => {
