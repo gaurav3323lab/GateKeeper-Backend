@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
-const auth = require('../middleware/auth');
+const { verifyToken } = require('../middlewares/auth');
 
 // GET /api/notifications - Get all notifications for current user/flat
-router.get('/', auth, async (req, res) => {
+router.get('/', verifyToken, async (req, res) => {
   try {
     const { id: user_id, role, tower, flat_number, society_id } = req.user;
     
@@ -43,7 +43,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // PUT /api/notifications/:id/read - Mark a notification as read
-router.put('/:id/read', auth, async (req, res) => {
+router.put('/:id/read', verifyToken, async (req, res) => {
   try {
     const notifId = req.params.id;
     await db.execute('UPDATE in_app_notifications SET is_read = TRUE WHERE id = ?', [notifId]);
@@ -55,7 +55,7 @@ router.put('/:id/read', auth, async (req, res) => {
 });
 
 // PUT /api/notifications/read-all - Mark all as read for current user
-router.put('/read-all', auth, async (req, res) => {
+router.put('/read-all', verifyToken, async (req, res) => {
   try {
     const { id: user_id, role, tower, flat_number, society_id } = req.user;
     
