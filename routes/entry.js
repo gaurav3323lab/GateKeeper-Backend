@@ -8,6 +8,25 @@ const { cleanAndCorrectPlate } = require('../utils/anprHelper');
 
 let ocrWorker = null;
 
+async function getOCRWorker() {
+  if (!ocrWorker) {
+    console.log('[ANPR] Warming up Tesseract OCR worker...');
+    ocrWorker = await createWorker('eng');
+    await ocrWorker.setParameters({
+      // Whitelist: only characters that appear on Indian plates
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+      // PSM 7 = treat image as single line of text (best for number plates)
+      tessedit_pageseg_mode: '7',
+      // OEM 1 = LSTM neural network only (most accurate, no legacy mode)
+      tessedit_ocr_engine_mode: '1',
+      // No inter-word spacing — plate text is close-packed
+      preserve_interword_spaces: '0',
+    });
+    console.log('[ANPR] Tesseract worker ready ✅');
+  }
+  return ocrWorker;
+}
+
 // POST /api/entry/scan-plate
 // Accepts: { imageBase64: "data:image/jpeg;base64,..." }
 router.post('/scan-plate', async (req, res) => {
@@ -15,25 +34,19 @@ router.post('/scan-plate', async (req, res) => {
   if (!imageBase64) return res.status(400).json({ message: 'Image data required' });
 
   try {
-    if (!ocrWorker) {
-      console.log('[ANPR] Pre-warming new singleton Tesseract worker...');
-      ocrWorker = await createWorker('eng');
-      await ocrWorker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
-        tessedit_pageseg_mode: '6',
-      });
-      console.log('[ANPR] Tesseract worker pre-warmed successfully ✅');
-    }
-    const { data: { text, confidence } } = await ocrWorker.recognize(imageBase64);
+    const worker = await getOCRWorker();
+
+    // Run OCR on the image
+    const { data: { text, confidence } } = await worker.recognize(imageBase64);
     
     // Auto-heal common OCR recognition errors and layout-format the Indian license plate
     const parsed = cleanAndCorrectPlate(text);
-    console.log(`[ANPR] Scanned Raw: "${text.replace(/\n/g, ' ').trim()}" -> Auto-Healed: "${parsed.formatted}" (Confidence: ${Math.round(confidence)}%)`);
+    console.log(`[ANPR] Raw: "${text.replace(/\n/g, ' ').trim()}" → Corrected: "${parsed.formatted}" (Confidence: ${Math.round(confidence)}%)`);
     
     res.json({ text: parsed.formatted, confidence: Math.round(confidence) });
   } catch (err) {
-    console.error('OCR Error:', err.message);
-    // If worker fails/crashes, reset it so the next request spins up a fresh one
+    console.error('[ANPR] OCR Error:', err.message);
+    // Reset worker so next request gets a fresh one
     if (ocrWorker) {
       try { await ocrWorker.terminate(); } catch (e) {}
       ocrWorker = null;
