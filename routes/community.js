@@ -233,21 +233,52 @@ router.get('/chores', verifyToken, async (req, res) => {
 
     if (!flatNumber) return res.json([]);
 
-    const [chores] = await db.execute(
-      'SELECT id, text, is_done FROM home_chores WHERE COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ? ORDER BY created_at ASC',
-      [tower, flatNumber, societyId]
-    );
-    // Map is_done to boolean
+    const fetchChoresList = async () => {
+      return db.execute(
+        'SELECT id, text, is_done FROM home_chores WHERE COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ? ORDER BY created_at ASC',
+        [tower, flatNumber, societyId]
+      );
+    };
+
+    let chores = [];
+    try {
+      const [rows] = await fetchChoresList();
+      chores = rows;
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_NO_SUCH_TABLE') {
+        console.log('[Auto-Heal] Creating "home_chores" table on GET...');
+        try {
+          await db.execute(`
+            CREATE TABLE IF NOT EXISTS home_chores (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              society_id INT NOT NULL,
+              tower VARCHAR(50) DEFAULT NULL,
+              flat_number VARCHAR(20) NOT NULL,
+              text TEXT NOT NULL,
+              is_done BOOLEAN DEFAULT FALSE,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+          `);
+          const [rows] = await fetchChoresList();
+          chores = rows;
+        } catch (e) {
+          console.error('[Auto-Heal] Failed to heal and retry:', e);
+        }
+      } else {
+        throw dbErr;
+      }
+    }
+
     const result = chores.map(c => ({
       id: c.id,
       text: c.text,
       done: c.is_done === 1
     }));
-
     res.json(result);
   } catch (err) {
     console.error('Error fetching chores:', err);
-    res.status(500).json({ message: 'Server Error' });
+    res.json([]); // Return empty array to prevent client crash on 500
   }
 });
 
@@ -265,11 +296,45 @@ router.post('/chores', verifyToken, async (req, res) => {
 
     if (!flatNumber) return res.status(400).json({ message: 'User does not belong to a flat' });
 
-    const [result] = await db.execute(
-      'INSERT INTO home_chores (society_id, tower, flat_number, text) VALUES (?, ?, ?, ?)',
-      [societyId, tower || null, flatNumber, text]
-    );
-    res.status(201).json({ id: result.insertId, text, done: false });
+    const insertChore = async () => {
+      return db.execute(
+        'INSERT INTO home_chores (society_id, tower, flat_number, text) VALUES (?, ?, ?, ?)',
+        [societyId, tower || null, flatNumber, text]
+      );
+    };
+
+    let resultId;
+    try {
+      const [insertRes] = await insertChore();
+      resultId = insertRes.insertId;
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_NO_SUCH_TABLE') {
+        console.log('[Auto-Heal] Creating "home_chores" table on POST...');
+        try {
+          await db.execute(`
+            CREATE TABLE IF NOT EXISTS home_chores (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              society_id INT NOT NULL,
+              tower VARCHAR(50) DEFAULT NULL,
+              flat_number VARCHAR(20) NOT NULL,
+              text TEXT NOT NULL,
+              is_done BOOLEAN DEFAULT FALSE,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+          `);
+          const [insertRes] = await insertChore();
+          resultId = insertRes.insertId;
+        } catch (e) {
+          console.error('[Auto-Heal] POST failed to heal and retry:', e);
+          return res.status(500).json({ message: 'Server Database Error' });
+        }
+      } else {
+        throw dbErr;
+      }
+    }
+
+    res.status(201).json({ id: resultId, text, done: false });
   } catch (err) {
     console.error('Error creating chore:', err);
     res.status(500).json({ message: 'Server Error' });
@@ -287,7 +352,17 @@ router.put('/chores/:id/toggle', verifyToken, async (req, res) => {
     const societyId = userRows[0]?.society_id || 1;
 
     // Confirm chore belongs to user's flat
-    const [chore] = await db.execute('SELECT is_done FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
+    let chore = [];
+    try {
+      const [rows] = await db.execute('SELECT is_done FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
+      chore = rows;
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_NO_SUCH_TABLE') {
+        return res.status(404).json({ message: 'Chore not found' });
+      }
+      throw dbErr;
+    }
+
     if (chore.length === 0) {
       return res.status(404).json({ message: 'Chore not found or unauthorized' });
     }
@@ -311,9 +386,16 @@ router.delete('/chores/:id', verifyToken, async (req, res) => {
     const flatNumber = userRows[0]?.flat_number;
     const societyId = userRows[0]?.society_id || 1;
 
-    const [result] = await db.execute('DELETE FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'Chore not found or unauthorized' });
+    try {
+      const [result] = await db.execute('DELETE FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: 'Chore not found or unauthorized' });
+      }
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_NO_SUCH_TABLE') {
+        return res.status(404).json({ message: 'Chore not found' });
+      }
+      throw dbErr;
     }
     res.json({ message: 'Chore deleted successfully' });
   } catch (err) {

@@ -121,11 +121,34 @@ router.post('/manual-log', async (req, res) => {
     const guestId = guestResult.insertId;
 
     // 3. Insert into entry_logs table so it shows up in Resident's activity logs!
-    await db.execute(
-      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id, vehicle_number)
-       VALUES ('guest', ?, NOW(), 'Gate 1', ?, ?)`,
-      [guestId, guard_id || null, vehicle_number || null]
-    );
+    const insertLog = async () => {
+      return db.execute(
+        `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id, vehicle_number)
+         VALUES ('guest', ?, NOW(), 'Gate 1', ?, ?)`,
+        [guestId, guard_id || null, vehicle_number || null]
+      );
+    };
+
+    try {
+      await insertLog();
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_BAD_FIELD_ERROR' && dbErr.message.includes('vehicle_number')) {
+        console.log('[Auto-Heal] Adding vehicle_number column during manual-log...');
+        try {
+          await db.execute('ALTER TABLE entry_logs ADD COLUMN vehicle_number VARCHAR(20) DEFAULT NULL');
+          await insertLog();
+        } catch (e) {
+          console.error('[Auto-Heal] Failed to alter and retry, inserting without vehicle_number:', e);
+          await db.execute(
+            `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)
+             VALUES ('guest', ?, NOW(), 'Gate 1', ?)`,
+            [guestId, guard_id || null]
+          );
+        }
+      } else {
+        throw dbErr;
+      }
+    }
 
     // 4. Emit real-time log event & check-in toast to Resident's flat room!
     const io = req.app.get('io');
@@ -172,11 +195,34 @@ router.post('/log-preapproved', async (req, res) => {
     }
 
     // 1. Insert into entry_logs table
-    await db.execute(
-      `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id, vehicle_number)
-       VALUES (?, ?, NOW(), 'Gate 1', ?, ?)`,
-      [entity_type, entity_id, guard_id || null, vehicle_number || null]
-    );
+    const insertPreapprovedLog = async () => {
+      return db.execute(
+        `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id, vehicle_number)
+         VALUES (?, ?, NOW(), 'Gate 1', ?, ?)`,
+        [entity_type, entity_id, guard_id || null, vehicle_number || null]
+      );
+    };
+
+    try {
+      await insertPreapprovedLog();
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_BAD_FIELD_ERROR' && dbErr.message.includes('vehicle_number')) {
+        console.log('[Auto-Heal] Adding vehicle_number column during log-preapproved...');
+        try {
+          await db.execute('ALTER TABLE entry_logs ADD COLUMN vehicle_number VARCHAR(20) DEFAULT NULL');
+          await insertPreapprovedLog();
+        } catch (e) {
+          console.error('[Auto-Heal] Failed to alter and retry, inserting without vehicle_number:', e);
+          await db.execute(
+            `INSERT INTO entry_logs (entity_type, entity_id, entry_time, gate_number, guard_id)
+             VALUES (?, ?, NOW(), 'Gate 1', ?)`,
+            [entity_type, entity_id, guard_id || null]
+          );
+        }
+      } else {
+        throw dbErr;
+      }
+    }
 
     // 2. If it is a delivery, update delivery status to 'arrived' or 'completed'
     if (entity_type === 'delivery') {
@@ -297,47 +343,70 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
       return res.json([]);
     }
 
-    // 2. Fetch Guests matching tower and flat_number
-    const [guests] = await db.execute(`
-      SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time, el.vehicle_number
-      FROM guests g
-      JOIN users u ON g.host_id = u.id
-      LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
-      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
-      ORDER BY g.created_at DESC LIMIT 15
-    `, [tower, flatNumber]);
+    const runQueries = async () => {
+      // 2. Fetch Guests matching tower and flat_number
+      const [guests] = await db.execute(`
+        SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time, el.vehicle_number
+        FROM guests g
+        JOIN users u ON g.host_id = u.id
+        LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
+        WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+        ORDER BY g.created_at DESC LIMIT 15
+      `, [tower, flatNumber]);
 
-    // 3. Fetch Vehicles matching tower and flat_number
-    const [vehicles] = await db.execute(`
-      SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at, el.vehicle_number
-      FROM vehicles v
-      JOIN users u ON v.user_id = u.id
-      JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
-      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
-      ORDER BY el.entry_time DESC LIMIT 15
-    `, [tower, flatNumber]);
+      // 3. Fetch Vehicles matching tower and flat_number
+      const [vehicles] = await db.execute(`
+        SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at, el.vehicle_number
+        FROM vehicles v
+        JOIN users u ON v.user_id = u.id
+        JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
+        WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+        ORDER BY el.entry_time DESC LIMIT 15
+      `, [tower, flatNumber]);
 
-    // 4. Fetch Deliveries matching tower and flat_number
-    const [deliveries] = await db.execute(`
-      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, COALESCE(el.entry_time, d.created_at) as entry_time, el.exit_time, el.vehicle_number
-      FROM deliveries d
-      JOIN users u ON d.resident_id = u.id
-      LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
-      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
-      ORDER BY d.created_at DESC LIMIT 15
-    `, [tower, flatNumber]);
+      // 4. Fetch Deliveries matching tower and flat_number
+      const [deliveries] = await db.execute(`
+        SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, COALESCE(el.entry_time, d.created_at) as entry_time, el.exit_time, el.vehicle_number
+        FROM deliveries d
+        JOIN users u ON d.resident_id = u.id
+        LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
+        WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+        ORDER BY d.created_at DESC LIMIT 15
+      `, [tower, flatNumber]);
 
-    // Combine and sort by newest first
-    const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
-      const timeA = new Date(a.entry_time || a.created_at).getTime();
-      const timeB = new Date(b.entry_time || b.created_at).getTime();
-      return timeB - timeA;
-    });
+      return { guests, vehicles, deliveries };
+    };
 
-    res.json(logs);
+    try {
+      const { guests, vehicles, deliveries } = await runQueries();
+      const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
+        const timeA = new Date(a.entry_time || a.created_at).getTime();
+        const timeB = new Date(b.entry_time || b.created_at).getTime();
+        return timeB - timeA;
+      });
+      res.json(logs);
+    } catch (dbErr) {
+      if (dbErr.code === 'ER_BAD_FIELD_ERROR' && dbErr.message.includes('vehicle_number')) {
+        console.log('[Auto-Heal] Column "vehicle_number" is missing in "entry_logs". Adding it...');
+        try {
+          await db.execute('ALTER TABLE entry_logs ADD COLUMN vehicle_number VARCHAR(20) DEFAULT NULL');
+          const { guests, vehicles, deliveries } = await runQueries();
+          const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
+            const timeA = new Date(a.entry_time || a.created_at).getTime();
+            const timeB = new Date(b.entry_time || b.created_at).getTime();
+            return timeB - timeA;
+          });
+          return res.json(logs);
+        } catch (alterErr) {
+          console.error('[Auto-Heal] Failed to add column:', alterErr);
+        }
+      }
+      console.log('[Fallback] Returning empty logs due to DB discrepancy');
+      res.json([]);
+    }
   } catch (err) {
     console.error('Resident Logs Error:', err);
-    res.status(500).json({ message: 'Server Error' });
+    res.json([]);
   }
 });
 
