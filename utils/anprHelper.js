@@ -6,18 +6,42 @@ const VALID_STATES = [
 ];
 
 const COMMON_STATE_CORRECTIONS = {
-  'M1': 'MH', 'MI': 'MH', 'MO': 'MH', 'M0': 'MH',
-  'D1': 'DL', 'DI': 'DL', 'DO': 'DL', 'D0': 'DL',
-  'K1': 'KA', 'KI': 'KA',
-  'H1': 'HR', 'HI': 'HR',
-  'U1': 'UP', 'UI': 'UP', 'U0': 'UP', 'UO': 'UP',
-  'G1': 'GJ', 'GI': 'GJ',
-  'A1': 'AP', 'AI': 'AP',
-  'T1': 'TS', 'TI': 'TS',
-  'R1': 'RJ', 'RI': 'RJ',
-  'W1': 'WB', 'WI': 'WB',
-  'P1': 'PB', 'PI': 'PB',
-  'C1': 'CH', 'CI': 'CH'
+  // MH corrections
+  'M1': 'MH', 'MI': 'MH', 'MO': 'MH', 'M0': 'MH', 'NH': 'MH', 'NK': 'MH', 'WH': 'MH', 'N1': 'MH', 'NI': 'MH', 'N0': 'MH', 'NO': 'MH',
+  // DL corrections
+  'D1': 'DL', 'DI': 'DL', 'DO': 'DL', 'D0': 'DL', 'OL': 'DL', 'O1': 'DL', 'OI': 'DL', 'QL': 'DL', 'Q1': 'DL', 'QI': 'DL', '0L': 'DL', '01': 'DL', '0I': 'DL',
+  // KA corrections
+  'K1': 'KA', 'KI': 'KA', 'KB': 'KA', 'K4': 'KA', 'XA': 'KA', 'X1': 'KA', 'XI': 'KA',
+  // HR corrections
+  'H1': 'HR', 'HI': 'HR', 'H0': 'HR', 'HO': 'HR',
+  // UP corrections
+  'U1': 'UP', 'UI': 'UP', 'U0': 'UP', 'UO': 'UP', 'VF': 'UP', 'UF': 'UP', 'VP': 'UP', '0P': 'UP', 'OP': 'UP',
+  // GJ corrections
+  'G1': 'GJ', 'GI': 'GJ', 'G0': 'GJ', 'GO': 'GJ', 'C1': 'GJ', 'CI': 'GJ', 'CJ': 'GJ',
+  // AP corrections
+  'A1': 'AP', 'AI': 'AP', 'A0': 'AP', 'AO': 'AP', '4P': 'AP', '41': 'AP', '4I': 'AP',
+  // TS corrections
+  'T1': 'TS', 'TI': 'TS', 'T0': 'TS', 'TO': 'TS', '7S': 'TS', '71': 'TS', '7I': 'TS',
+  // RJ corrections
+  'R1': 'RJ', 'RI': 'RJ', 'R0': 'RJ', 'RO': 'RJ', 'R2': 'RJ', 'RZ': 'RJ', 'RN': 'RJ', 'RL': 'RJ',
+  // WB corrections
+  'W1': 'WB', 'WI': 'WB', 'W0': 'WB', 'WO': 'WB', 'VVB': 'WB', 'VVI': 'WB',
+  // PB corrections
+  'P1': 'PB', 'PI': 'PB', 'P0': 'PB', 'PO': 'PB', 'FB': 'PB', 'FI': 'PB',
+  // CH corrections
+  'C1': 'CH', 'CI': 'CH', 'C0': 'CH', 'CO': 'CH',
+  // JK corrections
+  'J1': 'JK', 'JI': 'JK', 'J0': 'JK', 'JO': 'JK', '1K': 'JK', 'IK': 'JK', 'TK': 'JK',
+  // KL corrections
+  'KL': 'KL',
+  // TN corrections
+  'TN': 'TN', '7N': 'TN', '1N': 'TN', 'IN': 'TN',
+  // BR corrections
+  'B1': 'BR', 'BI': 'BR', 'B0': 'BR', 'BO': 'BR', '8R': 'BR', '81': 'BR', '8I': 'BR',
+  // JH corrections
+  '1H': 'JH', 'IH': 'JH',
+  // OD corrections
+  'O0': 'OD', '0D': 'OD', '00': 'OD'
 };
 
 const CHAR_TO_DIGIT = {
@@ -50,19 +74,12 @@ function forceChar(char) {
 function cleanAndCorrectPlate(ocrText) {
   if (!ocrText) return { original: '', corrected: '', formatted: '', type: 'Unknown' };
 
-  // 1. Convert to uppercase and strip non-alphanumeric characters except spaces
-  let cleaned = ocrText.toUpperCase().replace(/[^A-Z0-9 ]/g, '');
+  // 1. Convert to uppercase and strip ALL non-alphanumeric characters including spaces
+  let cleaned = ocrText.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  // 2. Remove HSRP license plate noise prefixes (IND, INDIA)
-  let tempClean = cleaned.replace(/\s+/g, '');
-  if (tempClean.startsWith('INDIA')) {
-    cleaned = cleaned.substring(cleaned.indexOf('I') + 5);
-  } else if (tempClean.startsWith('IND')) {
-    cleaned = cleaned.substring(cleaned.indexOf('I') + 3);
-  }
-
-  // Strip all spaces for standard pattern parsing
-  cleaned = cleaned.replace(/\s+/g, '');
+  // 2. Remove HSRP license plate noise prefixes (IND, INDIA and common OCR typos like 1ND, LND)
+  const hsrpRegex = /^[1IL|!T]ND(?:[1I]A|A)?/;
+  cleaned = cleaned.replace(hsrpRegex, '');
 
   if (cleaned.length < 5) {
     return {
@@ -157,7 +174,7 @@ function cleanAndCorrectPlate(ocrText) {
       const c = seriesCandidate[i];
       if (c >= 'A' && c <= 'Z') {
         score += 1.5;
-      } else if (CHAR_TO_DIGIT[c]) {
+      } else if (DIGIT_TO_CHAR[c]) { // If it's a digit that maps to a letter (e.g. '1' -> 'I')
         score += 0.5;
       } else {
         score -= 1.0;
@@ -169,15 +186,16 @@ function cleanAndCorrectPlate(ocrText) {
       const c = numberCandidate[i];
       if (c >= '0' && c <= '9') {
         score += 1.5;
-      } else if (DIGIT_TO_CHAR[c]) {
+      } else if (CHAR_TO_DIGIT[c]) { // If it's a letter that maps to a digit (e.g. 'O' -> '0')
         score += 0.5;
       } else {
         score -= 1.0;
       }
     }
     
-    // Dynamic layout prior weights based on standard Indian layouts
-    if (numberCandidate.length === 4) score += 1.0;
+    // Layout priors
+    if (numberCandidate.length === 0) score -= 5.0;
+    else if (numberCandidate.length === 4) score += 1.0;
     else if (numberCandidate.length === 3) score += 0.4;
     else if (numberCandidate.length === 2) score += 0.1;
     
