@@ -6,42 +6,71 @@ const VALID_STATES = [
 ];
 
 const COMMON_STATE_CORRECTIONS = {
-  // MH corrections
-  'M1': 'MH', 'MI': 'MH', 'MO': 'MH', 'M0': 'MH', 'NH': 'MH', 'NK': 'MH', 'WH': 'MH', 'N1': 'MH', 'NI': 'MH', 'N0': 'MH', 'NO': 'MH',
-  // DL corrections
-  'D1': 'DL', 'DI': 'DL', 'DO': 'DL', 'D0': 'DL', 'OL': 'DL', 'O1': 'DL', 'OI': 'DL', 'QL': 'DL', 'Q1': 'DL', 'QI': 'DL', '0L': 'DL', '01': 'DL', '0I': 'DL',
-  // KA corrections
-  'K1': 'KA', 'KI': 'KA', 'KB': 'KA', 'K4': 'KA', 'XA': 'KA', 'X1': 'KA', 'XI': 'KA',
-  // HR corrections
+  // MH (Maharashtra) — M confused with N or W
+  'M1': 'MH', 'MI': 'MH', 'MO': 'MH', 'M0': 'MH',
+  'NH': 'MH', 'N1': 'MH', 'NI': 'MH', 'N0': 'MH', 'NO': 'MH',
+  'WH': 'MH',
+  // DL (Delhi) — D confused with O/Q/0
+  'D1': 'DL', 'DI': 'DL', 'DO': 'DL', 'D0': 'DL',
+  'OL': 'DL', 'O1': 'DL', 'OI': 'DL',
+  'QL': 'DL', 'Q1': 'DL', 'QI': 'DL',
+  '0L': 'DL', '01': 'DL', '0I': 'DL',
+  // KA (Karnataka) — K confused with X; A confused with 4
+  'K1': 'KA', 'KI': 'KA', 'KB': 'KA', 'K4': 'KA',
+  'XA': 'KA', 'X1': 'KA', 'XI': 'KA',
+  // HR (Haryana) — H confused with 1
   'H1': 'HR', 'HI': 'HR', 'H0': 'HR', 'HO': 'HR',
-  // UP corrections
-  'U1': 'UP', 'UI': 'UP', 'U0': 'UP', 'UO': 'UP', 'VF': 'UP', 'UF': 'UP', 'VP': 'UP', '0P': 'UP', 'OP': 'UP',
-  // GJ corrections
-  'G1': 'GJ', 'GI': 'GJ', 'G0': 'GJ', 'GO': 'GJ', 'C1': 'GJ', 'CI': 'GJ', 'CJ': 'GJ',
-  // AP corrections
-  'A1': 'AP', 'AI': 'AP', 'A0': 'AP', 'AO': 'AP', '4P': 'AP', '41': 'AP', '4I': 'AP',
-  // TS corrections
-  'T1': 'TS', 'TI': 'TS', 'T0': 'TS', 'TO': 'TS', '7S': 'TS', '71': 'TS', '7I': 'TS',
-  // RJ corrections
-  'R1': 'RJ', 'RI': 'RJ', 'R0': 'RJ', 'RO': 'RJ', 'R2': 'RJ', 'RZ': 'RJ', 'RN': 'RJ', 'RL': 'RJ',
-  // WB corrections
-  'W1': 'WB', 'WI': 'WB', 'W0': 'WB', 'WO': 'WB', 'VVB': 'WB', 'VVI': 'WB',
-  // PB corrections
-  'P1': 'PB', 'PI': 'PB', 'P0': 'PB', 'PO': 'PB', 'FB': 'PB', 'FI': 'PB',
-  // CH corrections
-  'C1': 'CH', 'CI': 'CH', 'C0': 'CH', 'CO': 'CH',
-  // JK corrections
-  'J1': 'JK', 'JI': 'JK', 'J0': 'JK', 'JO': 'JK', '1K': 'JK', 'IK': 'JK', 'TK': 'JK',
-  // KL corrections
-  'KL': 'KL',
-  // TN corrections
-  'TN': 'TN', '7N': 'TN', '1N': 'TN', 'IN': 'TN',
-  // BR corrections
-  'B1': 'BR', 'BI': 'BR', 'B0': 'BR', 'BO': 'BR', '8R': 'BR', '81': 'BR', '8I': 'BR',
-  // JH corrections
+  // UP (Uttar Pradesh) — U confused with V; P confused with F
+  'U1': 'UP', 'UI': 'UP', 'U0': 'UP', 'UO': 'UP',
+  'VP': 'UP', '0P': 'UP', 'OP': 'UP',
+  // GJ (Gujarat) — G confused with C/6; J confused with I/1
+  // NOTE: CI and CJ intentionally NOT here (ambiguous with Chandigarh CH)
+  'G1': 'GJ', 'GI': 'GJ', 'G0': 'GJ', 'GO': 'GJ',
+  '61': 'GJ', '6I': 'GJ', '6J': 'GJ',
+  // CH (Chandigarh) — C confused with G/6; H confused with 1
+  'C1': 'CH', 'CI': 'CH', 'C0': 'CH', 'CO': 'CH', 'CJ': 'CH',
+  // AP (Andhra Pradesh) — A confused with 4
+  'A1': 'AP', 'AI': 'AP', 'A0': 'AP', 'AO': 'AP',
+  '4P': 'AP', '41': 'AP', '4I': 'AP',
+  // TS (Telangana) — T confused with 7
+  'T1': 'TS', 'TI': 'TS', 'T0': 'TS', 'TO': 'TS',
+  '7S': 'TS', '71': 'TS', '7I': 'TS',
+  // RJ (Rajasthan) — J confused with I/1/L/N/Z
+  'R1': 'RJ', 'RI': 'RJ', 'R0': 'RJ', 'RO': 'RJ',
+  'R2': 'RJ', 'RZ': 'RJ', 'RN': 'RJ', 'RL': 'RJ',
+  // WB (West Bengal) — B confused with I
+  'W1': 'WB', 'WI': 'WB', 'W0': 'WB', 'WO': 'WB',
+  // PB (Punjab) — P confused with F; B confused with I
+  'P1': 'PB', 'PI': 'PB', 'P0': 'PB', 'PO': 'PB',
+  'FB': 'PB', 'FI': 'PB',
+  // JK (Jammu & Kashmir) — J confused with I/T; K confused with I
+  'J1': 'JK', 'JI': 'JK', 'J0': 'JK', 'JO': 'JK',
+  '1K': 'JK', 'IK': 'JK', 'TK': 'JK',
+  // TN (Tamil Nadu) — 7 → T, 1/I → N (rare but happens)
+  '7N': 'TN', '1N': 'TN',
+  // BR (Bihar) — B confused with 8
+  'B1': 'BR', 'BI': 'BR', 'B0': 'BR', 'BO': 'BR',
+  '8R': 'BR', '81': 'BR', '8I': 'BR',
+  // JH (Jharkhand)
   '1H': 'JH', 'IH': 'JH',
-  // OD corrections
-  'O0': 'OD', '0D': 'OD', '00': 'OD'
+  // OD (Odisha) — O confused with 0
+  'O0': 'OD', '0D': 'OD', '00': 'OD',
+  // MP (Madhya Pradesh) \u2014 M and P are both clear letters, no real OCR typos
+  'MP': 'MP',
+  // GA (Goa)
+  'GA': 'GA', '6A': 'GA',
+  // CG (Chhattisgarh)
+  'CG': 'CG', '(G': 'CG',
+  // HP (Himachal Pradesh)
+  'HP': 'HP', '1P': 'HP',
+  // AS (Assam)
+  'AS': 'AS', '45': 'AS', 'A5': 'AS',
+  // TR (Tripura)
+  'TR': 'TR',
+  // MN (Manipur), ML (Meghalaya), MZ (Mizoram)
+  'MN': 'MN', 'ML': 'ML', 'MZ': 'MZ',
+  // UK (Uttarakhand)
+  'UK': 'UK', 'U1K': 'UK',
 };
 
 const CHAR_TO_DIGIT = {
@@ -77,8 +106,9 @@ function cleanAndCorrectPlate(ocrText) {
   // 1. Convert to uppercase and strip ALL non-alphanumeric characters including spaces
   let cleaned = ocrText.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  // 2. Remove HSRP license plate noise prefixes (IND, INDIA and common OCR typos like 1ND, LND)
-  const hsrpRegex = /^[1IL|!T]ND(?:[1I]A|A)?/;
+  // 2. Remove HSRP license plate noise prefixes (IND / INDIA)
+  // Matches: IND, 1ND, LND (L looks like I), followed by optional IA/1A
+  const hsrpRegex = /^[1IL]ND(?:1A|IA|A)?/;
   cleaned = cleaned.replace(hsrpRegex, '');
 
   if (cleaned.length < 5) {
