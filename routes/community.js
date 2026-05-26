@@ -58,9 +58,9 @@ router.get('/posts', verifyToken, async (req, res) => {
         // Check if anyone from the user's flat has voted on this poll (1 vote per flat rule)
         const [myFlatVote] = await db.execute(`
           SELECT selected_option FROM community_poll_votes 
-          WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE COALESCE(tower, '') = COALESCE(?, '') AND flat_number = ? AND society_id = ?)
+          WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE COALESCE(tower, '') = CAST(? AS CHAR) AND flat_number = ? AND society_id = ?)
           LIMIT 1
-        `, [post.id, tower, flatNumber, societyId]);
+        `, [post.id, tower || '', flatNumber, societyId]);
         
         const votedOption = myFlatVote[0]?.selected_option || null;
 
@@ -203,8 +203,8 @@ router.post('/posts/:id/vote', verifyToken, async (req, res) => {
     // Check if any resident from the same flat has voted already
     const [existing] = await db.execute(`
       SELECT id FROM community_poll_votes 
-      WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE COALESCE(tower, '') = COALESCE(?, '') AND flat_number = ? AND society_id = ?)
-    `, [postId, tower, flatNumber, societyId]);
+      WHERE post_id = ? AND user_id IN (SELECT id FROM users WHERE COALESCE(tower, '') = CAST(? AS CHAR) AND flat_number = ? AND society_id = ?)
+    `, [postId, tower || '', flatNumber, societyId]);
 
     if (existing.length > 0) {
       return res.status(400).json({ message: 'A vote has already been registered for your flat!' });
@@ -235,8 +235,8 @@ router.get('/chores', verifyToken, async (req, res) => {
 
     const fetchChoresList = async () => {
       return db.execute(
-        'SELECT id, text, is_done FROM home_chores WHERE COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ? ORDER BY created_at ASC',
-        [tower, flatNumber, societyId]
+        'SELECT id, text, is_done FROM home_chores WHERE COALESCE(tower, \'\') = CAST(? AS CHAR) AND flat_number = ? AND society_id = ? ORDER BY created_at ASC',
+        [tower || '', flatNumber, societyId]
       );
     };
 
@@ -354,7 +354,7 @@ router.put('/chores/:id/toggle', verifyToken, async (req, res) => {
     // Confirm chore belongs to user's flat
     let chore = [];
     try {
-      const [rows] = await db.execute('SELECT is_done FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
+      const [rows] = await db.execute('SELECT is_done FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = CAST(? AS CHAR) AND flat_number = ? AND society_id = ?', [choreId, tower || '', flatNumber, societyId]);
       chore = rows;
     } catch (dbErr) {
       if (dbErr.code === 'ER_NO_SUCH_TABLE') {
@@ -387,7 +387,7 @@ router.delete('/chores/:id', verifyToken, async (req, res) => {
     const societyId = userRows[0]?.society_id || 1;
 
     try {
-      const [result] = await db.execute('DELETE FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = COALESCE(?, \'\') AND flat_number = ? AND society_id = ?', [choreId, tower, flatNumber, societyId]);
+      const [result] = await db.execute('DELETE FROM home_chores WHERE id = ? AND COALESCE(tower, \'\') = CAST(? AS CHAR) AND flat_number = ? AND society_id = ?', [choreId, tower || '', flatNumber, societyId]);
       if (result.affectedRows === 0) {
         return res.status(404).json({ message: 'Chore not found or unauthorized' });
       }

@@ -105,8 +105,8 @@ router.post('/manual-log', async (req, res) => {
   try {
     // 1. Find resident host_id matching the tower and flat number (roles primary/family)
     const [users] = await db.execute(
-      `SELECT id FROM users WHERE COALESCE(tower, '') = COALESCE(?, '') AND flat_number = ? AND role IN ('resident_primary', 'resident_family') LIMIT 1`,
-      [tower || null, flat_number]
+      `SELECT id FROM users WHERE COALESCE(tower, '') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary', 'resident_family') LIMIT 1`,
+      [tower || '', flat_number]
     );
     
     const hostId = users.length > 0 ? users[0].id : null;
@@ -350,9 +350,9 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
         FROM guests g
         JOIN users u ON g.host_id = u.id
         LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
-        WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+        WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ?
         ORDER BY g.created_at DESC LIMIT 15
-      `, [tower, flatNumber]);
+      `, [tower || '', flatNumber]);
 
       // 3. Fetch Vehicles matching tower and flat_number
       const [vehicles] = await db.execute(`
@@ -360,9 +360,9 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
         FROM vehicles v
         JOIN users u ON v.user_id = u.id
         JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
-        WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+        WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ?
         ORDER BY el.entry_time DESC LIMIT 15
-      `, [tower, flatNumber]);
+      `, [tower || '', flatNumber]);
 
       // 4. Fetch Deliveries matching tower and flat_number
       const [deliveries] = await db.execute(`
@@ -370,9 +370,9 @@ router.get('/resident-logs', verifyToken, async (req, res) => {
         FROM deliveries d
         JOIN users u ON d.resident_id = u.id
         LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
-        WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+        WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ?
         ORDER BY d.created_at DESC LIMIT 15
-      `, [tower, flatNumber]);
+      `, [tower || '', flatNumber]);
 
       return { guests, vehicles, deliveries };
     };
