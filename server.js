@@ -119,6 +119,7 @@ app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/ads', require('./routes/ads'));
 app.use('/api/push', require('./routes/push'));
 app.use('/api/community', require('./routes/community'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 // ── Auto-Migration on Startup ─────────────────────────────────
 // Nayi tables automatically create ho jayengi agar exist nahi karti
@@ -267,6 +268,18 @@ async function autoMigrate() {
         FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
       )
     `);
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS society_towers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        society_id INT NOT NULL,
+        tower_name VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_tower (society_id, tower_name),
+        FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+      )
+    `);
+
 
     // Dynamic Seed: If community_posts is empty, insert the default active poll!
     const [postsCount] = await db.execute('SELECT COUNT(*) AS cnt FROM community_posts');

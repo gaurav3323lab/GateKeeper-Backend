@@ -171,4 +171,61 @@ router.put('/:societyId/settings', verifyToken, async (req, res) => {
   }
 });
 
+// GET towers of a society (Public: used for registration & dropdowns)
+router.get('/:societyId/towers', async (req, res) => {
+  const { societyId } = req.params;
+  try {
+    const [rows] = await db.query('SELECT id, tower_name FROM society_towers WHERE society_id = ? ORDER BY tower_name ASC', [societyId]);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching society towers:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST add a tower to a society
+router.post('/:societyId/towers', verifyToken, authorizeRoles(roles.SUPER_ADMIN, roles.MANAGER, roles.ADMIN), async (req, res) => {
+  const { societyId } = req.params;
+  const { tower_name } = req.body;
+  if (!tower_name || !tower_name.trim()) {
+    return res.status(400).json({ message: 'Tower name is required' });
+  }
+  try {
+    const trimmedName = tower_name.trim();
+    // Check if duplicate
+    const [existing] = await db.query('SELECT id FROM society_towers WHERE society_id = ? AND tower_name = ?', [societyId, trimmedName]);
+    if (existing.length > 0) {
+      return res.status(400).json({ message: 'Tower already exists in this society' });
+    }
+
+    const [result] = await db.query(
+      'INSERT INTO society_towers (society_id, tower_name) VALUES (?, ?)',
+      [societyId, trimmedName]
+    );
+    res.status(201).json({
+      message: 'Tower added successfully',
+      tower: { id: result.insertId, tower_name: trimmedName }
+    });
+  } catch (error) {
+    console.error('Error adding society tower:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// DELETE a tower from a society
+router.delete('/:societyId/towers/:towerId', verifyToken, authorizeRoles(roles.SUPER_ADMIN, roles.MANAGER, roles.ADMIN), async (req, res) => {
+  const { societyId, towerId } = req.params;
+  try {
+    const [result] = await db.query('DELETE FROM society_towers WHERE id = ? AND society_id = ?', [towerId, societyId]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Tower not found' });
+    }
+    res.json({ message: 'Tower deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting society tower:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;
+

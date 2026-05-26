@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS in_app_notifications (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NULL,
+  society_id INT NULL,
+  tower VARCHAR(50) NULL,
+  flat_number VARCHAR(50) NULL,
+  title VARCHAR(255) NOT NULL,
+  message TEXT NOT NULL,
+  type VARCHAR(50) DEFAULT 'general',
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+);

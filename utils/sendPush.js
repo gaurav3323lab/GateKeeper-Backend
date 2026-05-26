@@ -91,6 +91,15 @@ async function sendSinglePush(sub, title, body, data = {}) {
  * Send push notification to a specific user by their user_id
  */
 async function sendPushToUser(userId, title, body, data = {}) {
+  try {
+    const type = data.type || 'general';
+    // Insert into in_app_notifications
+    await db.execute(
+      'INSERT INTO in_app_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+      [userId, title, body, type]
+    );
+  } catch(e) { console.error('DB Insert Error:', e.message); }
+
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
@@ -109,6 +118,15 @@ async function sendPushToUser(userId, title, body, data = {}) {
  * Send push notification to ALL users with a specific role
  */
 async function sendPushToRole(role, title, body, data = {}) {
+  try {
+    // Insert into in_app_notifications for all users of this role
+    const type = data.type || 'general';
+    await db.execute(
+      'INSERT INTO in_app_notifications (user_id, title, message, type) SELECT id, ?, ?, ? FROM users WHERE role = ?',
+      [title, body, type, role]
+    );
+  } catch(e) { console.error('DB Insert Error:', e.message); }
+
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
@@ -130,6 +148,14 @@ async function sendPushToRole(role, title, body, data = {}) {
  * Send push notification to ALL users in a society
  */
 async function sendPushToSociety(societyId, title, body, data = {}) {
+  try {
+    const type = data.type || 'general';
+    await db.execute(
+      'INSERT INTO in_app_notifications (society_id, title, message, type) VALUES (?, ?, ?, ?)',
+      [societyId, title, body, type]
+    );
+  } catch(e) { console.error('DB Insert Error:', e.message); }
+
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
@@ -151,6 +177,14 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
  * Send push notification to a specific flat (resident_primary + resident_family)
  */
 async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
+  try {
+    const type = data.type || 'general';
+    await db.execute(
+      'INSERT INTO in_app_notifications (society_id, tower, flat_number, title, message, type) VALUES (?, ?, ?, ?, ?, ?)',
+      [data.society_id || 1, tower || '', flatNumber, title, body, type] // Using society_id=1 as default if not passed in data
+    );
+  } catch(e) { console.error('DB Insert Error:', e.message); }
+
   if (!pushEnabled) return;
   try {
     const [subs] = await db.execute(
