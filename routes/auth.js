@@ -307,6 +307,53 @@ router.get('/debug-logs', async (req, res) => {
   }
 });
 
+// TEST RESIDENT LOGS ROUTE
+router.get('/test-resident-logs', async (req, res) => {
+  try {
+    const userId = 14; // Test for Gaurav Yadav
+    const [userRows] = await db.execute('SELECT tower, flat_number FROM users WHERE id = ?', [userId]);
+    const tower = userRows[0]?.tower;
+    const flatNumber = userRows[0]?.flat_number;
+
+    const [guests] = await db.execute(`
+      SELECT g.id, 'Guest' as type, g.name, g.purpose, g.created_at, el.entry_time, el.exit_time, el.vehicle_number
+      FROM guests g
+      JOIN users u ON g.host_id = u.id
+      LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
+      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+      ORDER BY g.created_at DESC LIMIT 15
+    `, [tower, flatNumber]);
+
+    const [vehicles] = await db.execute(`
+      SELECT v.id, 'Vehicle' as type, v.vehicle_number as name, v.type as purpose, el.entry_time, el.exit_time, el.entry_time as created_at, el.vehicle_number
+      FROM vehicles v
+      JOIN users u ON v.user_id = u.id
+      JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
+      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+      ORDER BY el.entry_time DESC LIMIT 15
+    `, [tower, flatNumber]);
+
+    const [deliveries] = await db.execute(`
+      SELECT d.id, 'Delivery' as type, d.company as name, d.status as purpose, d.created_at, COALESCE(el.entry_time, d.created_at) as entry_time, el.exit_time, el.vehicle_number
+      FROM deliveries d
+      JOIN users u ON d.resident_id = u.id
+      LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
+      WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ?
+      ORDER BY d.created_at DESC LIMIT 15
+    `, [tower, flatNumber]);
+
+    const logs = [...guests, ...vehicles, ...deliveries].sort((a, b) => {
+      const timeA = new Date(a.entry_time || a.created_at).getTime();
+      const timeB = new Date(b.entry_time || b.created_at).getTime();
+      return timeB - timeA;
+    });
+
+    res.json({ tower, flatNumber, logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // HEAL DATABASE ROUTE
 // Visit: /api/auth/heal-db to manually auto-heal the remote MySQL database schemas
 router.get('/heal-db', async (req, res) => {
