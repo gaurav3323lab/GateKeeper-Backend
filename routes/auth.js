@@ -320,7 +320,7 @@ router.get('/test-resident-logs', async (req, res) => {
       FROM guests g
       JOIN users u ON g.host_id = u.id
       LEFT JOIN entry_logs el ON el.entity_type = 'guest' AND el.entity_id = g.id
-      WHERE COALESCE(u.tower, '') = ? AND u.flat_number = ?
+      WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ?
       ORDER BY g.created_at DESC LIMIT 15
     `, [tower, flatNumber]);
 
@@ -329,7 +329,7 @@ router.get('/test-resident-logs', async (req, res) => {
       FROM vehicles v
       JOIN users u ON v.user_id = u.id
       JOIN entry_logs el ON el.entity_type = 'vehicle' AND el.entity_id = v.id
-      WHERE COALESCE(u.tower, '') = ? AND u.flat_number = ?
+      WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ?
       ORDER BY el.entry_time DESC LIMIT 15
     `, [tower, flatNumber]);
 
@@ -338,7 +338,7 @@ router.get('/test-resident-logs', async (req, res) => {
       FROM deliveries d
       JOIN users u ON d.resident_id = u.id
       LEFT JOIN entry_logs el ON el.entity_type = 'delivery' AND el.entity_id = d.id
-      WHERE COALESCE(u.tower, '') = ? AND u.flat_number = ?
+      WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ?
       ORDER BY d.created_at DESC LIMIT 15
     `, [tower, flatNumber]);
 
