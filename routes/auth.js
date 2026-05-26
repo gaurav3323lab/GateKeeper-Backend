@@ -294,5 +294,192 @@ router.get('/debug-db', async (req, res) => {
   }
 });
 
+// HEAL DATABASE ROUTE
+// Visit: /api/auth/heal-db to manually auto-heal the remote MySQL database schemas
+router.get('/heal-db', async (req, res) => {
+  const results = [];
+  try {
+    // 1. Add tower column to users table if not exists
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN tower VARCHAR(50) DEFAULT NULL AFTER society_id');
+      results.push('Added tower column to users successfully.');
+    } catch (e) {
+      results.push(`tower on users: ${e.message}`);
+    }
+
+    // 2. Add is_online column to users table if not exists
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN is_online BOOLEAN DEFAULT FALSE AFTER role');
+      results.push('Added is_online column to users successfully.');
+    } catch (e) {
+      results.push(`is_online on users: ${e.message}`);
+    }
+
+    // 3. Create home_chores table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS home_chores (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          society_id INT NOT NULL,
+          tower VARCHAR(50) DEFAULT NULL,
+          flat_number VARCHAR(20) NOT NULL,
+          text TEXT NOT NULL,
+          is_done BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+      `);
+      results.push('Table home_chores verified/created successfully.');
+    } catch (e) {
+      results.push(`home_chores table: ${e.message}`);
+    }
+
+    // 4. Add tower column to home_chores if not exists
+    try {
+      await db.execute('ALTER TABLE home_chores ADD COLUMN tower VARCHAR(50) DEFAULT NULL AFTER society_id');
+      results.push('Added tower column to home_chores successfully.');
+    } catch (e) {
+      results.push(`tower on home_chores: ${e.message}`);
+    }
+
+    // 5. Add vehicle_number column to entry_logs table if not exists
+    try {
+      await db.execute('ALTER TABLE entry_logs ADD COLUMN vehicle_number VARCHAR(20) DEFAULT NULL');
+      results.push('Added vehicle_number column to entry_logs successfully.');
+    } catch (e) {
+      results.push(`vehicle_number on entry_logs: ${e.message}`);
+    }
+
+    // 6. Create society_settings table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS society_settings (
+          society_id        INT PRIMARY KEY,
+          anpr              BOOLEAN NOT NULL DEFAULT TRUE,
+          preapproved       BOOLEAN NOT NULL DEFAULT TRUE,
+          manual            BOOLEAN NOT NULL DEFAULT TRUE,
+          vehicles          BOOLEAN NOT NULL DEFAULT TRUE,
+          checkout          BOOLEAN NOT NULL DEFAULT TRUE,
+          sos               BOOLEAN NOT NULL DEFAULT TRUE,
+          vehicle_mandatory BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+      `);
+      results.push('Table society_settings verified/created successfully.');
+    } catch (e) {
+      results.push(`society_settings table: ${e.message}`);
+    }
+
+    // 7. Create emergency_contacts table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS emergency_contacts (
+          id         INT AUTO_INCREMENT PRIMARY KEY,
+          society_id INT NOT NULL,
+          name       VARCHAR(100) NOT NULL,
+          phone      VARCHAR(20)  NOT NULL,
+          category   VARCHAR(50)  NOT NULL DEFAULT 'Other',
+          priority   INT          NOT NULL DEFAULT 5,
+          created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+      `);
+      results.push('Table emergency_contacts verified/created successfully.');
+    } catch (e) {
+      results.push(`emergency_contacts table: ${e.message}`);
+    }
+
+    // 8. Create community_posts table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS community_posts (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          society_id INT NOT NULL,
+          author_id INT NOT NULL,
+          type VARCHAR(20) DEFAULT 'post',
+          title VARCHAR(255) NOT NULL,
+          body TEXT NULL,
+          poll_options TEXT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      results.push('Table community_posts verified/created successfully.');
+    } catch (e) {
+      results.push(`community_posts table: ${e.message}`);
+    }
+
+    // 9. Create community_likes table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS community_likes (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          post_id INT NOT NULL,
+          user_id INT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_post_user (post_id, user_id)
+        )
+      `);
+      results.push('Table community_likes verified/created successfully.');
+    } catch (e) {
+      results.push(`community_likes table: ${e.message}`);
+    }
+
+    // 10. Create community_comments table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS community_comments (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          post_id INT NOT NULL,
+          author_id INT NOT NULL,
+          text TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      results.push('Table community_comments verified/created successfully.');
+    } catch (e) {
+      results.push(`community_comments table: ${e.message}`);
+    }
+
+    // 11. Create community_poll_votes table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS community_poll_votes (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          post_id INT NOT NULL,
+          user_id INT NOT NULL,
+          selected_option VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_post_user_vote (post_id, user_id)
+        )
+      `);
+      results.push('Table community_poll_votes verified/created successfully.');
+    } catch (e) {
+      results.push(`community_poll_votes table: ${e.message}`);
+    }
+
+    // 12. Create society_towers table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS society_towers (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          society_id INT NOT NULL,
+          tower_name VARCHAR(50) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uniq_tower (society_id, tower_name)
+        )
+      `);
+      results.push('Table society_towers verified/created successfully.');
+    } catch (e) {
+      results.push(`society_towers table: ${e.message}`);
+    }
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 
