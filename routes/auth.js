@@ -475,6 +475,27 @@ router.get('/heal-db', async (req, res) => {
       results.push(`society_towers table: ${e.message}`);
     }
 
+    // 13. Create in_app_notifications table if not exists
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS in_app_notifications (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT DEFAULT NULL,
+          society_id INT DEFAULT NULL,
+          tower VARCHAR(50) DEFAULT NULL,
+          flat_number VARCHAR(20) DEFAULT NULL,
+          title VARCHAR(255) NOT NULL,
+          message TEXT NOT NULL,
+          type VARCHAR(50) DEFAULT 'general',
+          is_read BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      results.push('Table in_app_notifications verified/created successfully.');
+    } catch (e) {
+      results.push(`in_app_notifications table: ${e.message}`);
+    }
+
     res.json({ success: true, results });
   } catch (err) {
     console.error(err);

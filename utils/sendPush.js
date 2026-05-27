@@ -191,7 +191,7 @@ async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
       `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
        FROM push_subscriptions ps
        JOIN users u ON ps.user_id = u.id
-       WHERE COALESCE(u.tower, '') = COALESCE(?, '') AND u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`,
+       WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`,
       [tower || null, flatNumber]
     );
     if (!subs.length) return;

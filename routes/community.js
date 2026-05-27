@@ -418,7 +418,7 @@ router.get('/daily-helpers', verifyToken, async (req, res) => {
         FROM staff_attendance 
         WHERE staff_id = ? AND date = CURDATE()
         ORDER BY check_in_time DESC LIMIT 1
-      `);
+      `, [member.id]);
 
       let status = 'Outside';
       let time = '--:--';

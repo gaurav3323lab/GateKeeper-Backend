@@ -289,6 +289,21 @@ async function autoMigrate() {
       )
     `);
 
+    // In-app notification storage (persistent notification bell)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS in_app_notifications (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        society_id  INT         DEFAULT NULL,
+        user_id     INT         DEFAULT NULL,
+        tower       VARCHAR(50) DEFAULT NULL,
+        flat_number VARCHAR(20) DEFAULT NULL,
+        type        VARCHAR(50) DEFAULT 'general',
+        title       VARCHAR(255) NOT NULL,
+        message     TEXT        NOT NULL,
+        is_read     BOOLEAN     DEFAULT FALSE,
+        created_at  TIMESTAMP   DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
     // Dynamic Seed: If community_posts is empty, insert the default active poll!
     const [postsCount] = await db.execute('SELECT COUNT(*) AS cnt FROM community_posts');

@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const db = require('../config/db');
 const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
 const { sendPushToUser } = require('../utils/sendPush');
+const { saveNotifForUser } = require('../utils/saveNotif');
 
 // Apply middleware to all manager routes
 router.use(verifyToken);
@@ -43,15 +44,15 @@ router.post('/approve-resident', async (req, res) => {
         });
       }
 
-      // 🔔 Web Push — Resident ko direct OS notification
-      await sendPushToUser(
-        userId,
-        status === 'active' ? '✅ Account Approved!' : '❌ Registration Rejected',
-        status === 'active'
-          ? `Namaste ${name}! Aapka GateKeeper account activate ho gaya hai. Ab login karein.`
-          : `Aapki registration abhi accept nahi hui. Society manager se milein.`,
-        { url: '/', type: 'approval', status }
-      );
+      // 🔔 Web Push + In-App Notif — Resident ko direct notification
+      const notifTitle = status === 'active' ? '✅ Account Approved!' : '❌ Registration Rejected';
+      const notifMsg = status === 'active'
+        ? `Namaste ${name}! Aapka GateKeeper account activate ho gaya hai. Ab login karein.`
+        : `Aapki registration abhi accept nahi hui. Society manager se milein.`;
+      await Promise.all([
+        sendPushToUser(userId, notifTitle, notifMsg, { url: '/', type: 'approval', status }),
+        saveNotifForUser(userId, residentRows[0].society_id || null, 'approval', notifTitle, notifMsg)
+      ]);
     }
 
     res.json({ message: `Resident account marked as ${status}` });
