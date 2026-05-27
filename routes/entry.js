@@ -495,8 +495,8 @@ router.post('/pre-approve', verifyToken, async (req, res) => {
         validTo = new Date(Date.now() + 86400000).toISOString().slice(0, 19).replace('T', ' ');
       }
       
-      // Generate a 6-digit numeric PIN
-      const pin = Math.floor(100000 + Math.random() * 900000).toString();
+      // Generate a 4-digit numeric PIN
+      const pin = Math.floor(1000 + Math.random() * 9000).toString();
       const [result] = await db.execute(
         `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to) VALUES (?, ?, ?, ?, ?, NOW(), ?)`,
         [name, phone || '', purpose || 'Guest', userId, pin, validTo]
