@@ -4,6 +4,8 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
+const { setIO } = require('./utils/sendPush');
+
 dotenv.config();
 
 const app = express();
@@ -18,6 +20,9 @@ const io = new Server(server, {
     credentials: true
   }
 });
+
+// Inject io into sendPush.js so push notifications can emit socket events
+setIO(io);
 
 // Middleware
 app.use(cors()); // Standard CORS helper
@@ -62,6 +67,15 @@ io.on('connection', (socket) => {
       } catch (err) {
         console.error('Failed to mark guard online:', err.message);
       }
+    }
+    // Admin also joins manager_room so they receive approval requests & SOS alerts
+    if (data.room === 'manager_room' && data.userId) {
+      socket.join('manager_room');
+    }
+    // Every user joins their personal room for vehicle/account-level notifications
+    if (data.userId) {
+      socket.join(`user_${data.userId}`);
+      console.log(`[Socket] ${socket.id} joined personal room: user_${data.userId}`);
     }
   });
 

@@ -1,6 +1,13 @@
 const webpush = require('web-push');
 const db = require('../config/db');
 
+// ── Socket.io reference (injected by server.js after startup) ───
+let _io = null;
+function setIO(io) { _io = io; }
+function emitNotif(room, data) {
+  try { if (_io && room) _io.to(room).emit('new_notification', data); } catch(e) {}
+}
+
 // ── VAPID Safe Init ───────────────────────────────────────────
 let pushEnabled = false;
 try {
@@ -91,13 +98,17 @@ async function sendSinglePush(sub, title, body, data = {}) {
  * Send push notification to a specific user by their user_id
  */
 async function sendPushToUser(userId, title, body, data = {}) {
+  const type = data.type || 'general';
   try {
-    const type = data.type || 'general';
-    // Insert into in_app_notifications
+    // Fetch society_id for this user to store correctly
+    const [uInfo] = await db.execute('SELECT society_id FROM users WHERE id = ?', [userId]);
+    const societyId = uInfo[0]?.society_id || null;
     await db.execute(
-      'INSERT INTO in_app_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [userId, title, body, type]
+      'INSERT INTO in_app_notifications (user_id, society_id, title, message, type) VALUES (?, ?, ?, ?, ?)',
+      [userId, societyId, title, body, type]
     );
+    // Emit socket event so frontend bell updates in realtime
+    emitNotif(`user_${userId}`, { type, title, body });
   } catch(e) { console.error('DB Insert Error:', e.message); }
 
   if (!pushEnabled) return;
@@ -118,13 +129,14 @@ async function sendPushToUser(userId, title, body, data = {}) {
  * Send push notification to ALL users with a specific role
  */
 async function sendPushToRole(role, title, body, data = {}) {
+  const type = data.type || 'general';
   try {
-    // Insert into in_app_notifications for all users of this role
-    const type = data.type || 'general';
     await db.execute(
       'INSERT INTO in_app_notifications (user_id, title, message, type) SELECT id, ?, ?, ? FROM users WHERE role = ?',
       [title, body, type, role]
     );
+    // Emit new_notification to the role room
+    emitNotif(`${role}_room`, { type, title, body });
   } catch(e) { console.error('DB Insert Error:', e.message); }
 
   if (!pushEnabled) return;
@@ -148,12 +160,14 @@ async function sendPushToRole(role, title, body, data = {}) {
  * Send push notification to ALL users in a society
  */
 async function sendPushToSociety(societyId, title, body, data = {}) {
+  const type = data.type || 'general';
   try {
-    const type = data.type || 'general';
     await db.execute(
       'INSERT INTO in_app_notifications (society_id, title, message, type) VALUES (?, ?, ?, ?)',
       [societyId, title, body, type]
     );
+    // Emit to society room (all connected users in this society)
+    emitNotif(`society_${societyId}`, { type, title, body });
   } catch(e) { console.error('DB Insert Error:', e.message); }
 
   if (!pushEnabled) return;
@@ -177,12 +191,15 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
  * Send push notification to a specific flat (resident_primary + resident_family)
  */
 async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
+  const type = data.type || 'general';
   try {
-    const type = data.type || 'general';
     await db.execute(
       'INSERT INTO in_app_notifications (society_id, tower, flat_number, title, message, type) VALUES (?, ?, ?, ?, ?, ?)',
       [data.society_id || null, tower || '', flatNumber, title, body, type]
     );
+    // Emit to the flat's socket room so bell updates in realtime
+    const flatRoom = `flat_${tower ? tower + '-' : ''}${flatNumber}`;
+    emitNotif(flatRoom, { type, title, body });
   } catch(e) { console.error('DB Insert Error:', e.message); }
 
   if (!pushEnabled) return;
@@ -202,4 +219,4 @@ async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
   }
 }
 
-module.exports = { sendPushToUser, sendPushToRole, sendPushToSociety, sendPushToFlat };
+module.exports = { sendPushToUser, sendPushToRole, sendPushToSociety, sendPushToFlat, setIO };

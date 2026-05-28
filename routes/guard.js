@@ -3,7 +3,6 @@ const router = express.Router();
 const db = require('../config/db');
 const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
 const { sendPushToUser, sendPushToFlat } = require('../utils/sendPush');
-const { saveNotifForFlat, saveNotifForUser } = require('../utils/saveNotif');
 
 router.use(verifyToken);
 router.use(authorizeRoles(roles.GUARD));
@@ -312,13 +311,14 @@ router.post('/checkout-visitor', async (req, res) => {
 
       // 🔔 Web Push + In-App Notif — Resident ko checkout notification
       if (flat_number) {
-        // Fetch society_id for flat
-        const [cInfo] = await db.execute('SELECT society_id FROM users WHERE flat_number = ? AND role IN (\'resident_primary\', \'resident_family\') LIMIT 1', [flat_number]);
+        // Fetch society_id for flat (with tower filter for accuracy)
+        const [cInfo] = await db.execute(
+          `SELECT society_id FROM users WHERE COALESCE(tower,'') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary','resident_family') LIMIT 1`,
+          [tower || '', flat_number]
+        );
         const cSocId = cInfo[0]?.society_id || null;
-        await Promise.all([
-          sendPushToFlat(tower, flat_number, `🚶 Visitor Chale Gaye`, `${name} society se bahar nikal gaye hain.`, { url: '/', type: 'checkout', flat_number }),
-          saveNotifForFlat(cSocId, tower, flat_number, 'checkout', '🚶 Visitor Chale Gaye', `${name} society se bahar nikal gaye hain.`)
-        ]);
+        // sendPushToFlat already inserts into in_app_notifications — no need for saveNotifForFlat
+        await sendPushToFlat(tower, flat_number, `🚶 Visitor Chale Gaye`, `${name} society se bahar nikal gaye hain.`, { url: '/', type: 'checkout', flat_number, society_id: cSocId });
       }
     }
 
@@ -363,10 +363,8 @@ router.post('/vehicle-log', async (req, res) => {
       }
 
       // 🔔 Web Push + In-App Notif — Vehicle owner ko ENTRY notification
-      await Promise.all([
-        sendPushToUser(vehicle.owner_id, `🚗 Gaadi Society Mein Aayi!`, `${vehicle.vehicle_number} (${vehicle.type}) ne society mein ENTRY ki hai.`, { url: '/', type: 'vehicle_entry', vehicle_id }),
-        saveNotifForUser(vehicle.owner_id, null, 'vehicle_entry', '🚗 Gaadi Society Mein Aayi!', `${vehicle.vehicle_number} (${vehicle.type}) ne society mein ENTRY ki hai.`)
-      ]);
+      // sendPushToUser already inserts into in_app_notifications — no duplicate saveNotifForUser needed
+      await sendPushToUser(vehicle.owner_id, `🚗 Gaadi Society Mein Aayi!`, `${vehicle.vehicle_number} (${vehicle.type}) ne society mein ENTRY ki hai.`, { url: '/', type: 'vehicle_entry', vehicle_id });
 
       res.json({ message: `${vehicle.vehicle_number} ki entry log ho gayi` });
 
@@ -388,10 +386,8 @@ router.post('/vehicle-log', async (req, res) => {
       }
 
       // 🔔 Web Push + In-App Notif — Vehicle owner ko EXIT notification
-      await Promise.all([
-        sendPushToUser(vehicle.owner_id, `🚗 Gaadi Bahar Gayi!`, `${vehicle.vehicle_number} (${vehicle.type}) ne society se EXIT ki hai.`, { url: '/', type: 'vehicle_exit', vehicle_id }),
-        saveNotifForUser(vehicle.owner_id, null, 'vehicle_exit', '🚗 Gaadi Bahar Gayi!', `${vehicle.vehicle_number} (${vehicle.type}) ne society se EXIT ki hai.`)
-      ]);
+      // sendPushToUser already inserts into in_app_notifications — no duplicate saveNotifForUser needed
+      await sendPushToUser(vehicle.owner_id, `🚗 Gaadi Bahar Gayi!`, `${vehicle.vehicle_number} (${vehicle.type}) ne society se EXIT ki hai.`, { url: '/', type: 'vehicle_exit', vehicle_id });
 
       res.json({ message: `${vehicle.vehicle_number} ki exit log ho gayi` });
 

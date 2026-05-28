@@ -4,7 +4,6 @@ const { createWorker } = require('tesseract.js');
 const db = require('../config/db');
 const { verifyToken } = require('../middlewares/auth');
 const { sendPushToUser, sendPushToRole, sendPushToFlat } = require('../utils/sendPush');
-const { saveNotifForFlat, saveNotifForUser, saveNotifForRole } = require('../utils/saveNotif');
 const { cleanAndCorrectPlate } = require('../utils/anprHelper');
 
 let ocrWorker = null;
@@ -81,18 +80,16 @@ router.post('/sos', async (req, res) => {
     }
 
     // 🔔 Web Push + In-App Notif — Guards aur Managers ko SOS notification
-    const pushTitle = `🚨 EMERGENCY SOS!`;
-    const pushBody = `Flat ${tower ? tower + '-' : ''}${flat_number} se SOS alert — ${user_name}. Turant respond karein!`;
+    // sendPushToRole already writes to in_app_notifications — no separate saveNotifForRole needed
     const flatCombined = `${tower ? tower + '-' : ''}${flat_number}`;
-    // Get society_id of the user who triggered SOS
-    const [uInfo] = await db.execute('SELECT society_id FROM users WHERE id = ?', [user_id]);
-    const sosSocietyId = uInfo[0]?.society_id || null;
+    const pushTitle = `🚨 EMERGENCY SOS!`;
+    const pushBody = `Flat ${flatCombined} se SOS alert — ${user_name}. Turant respond karein!`;
     await Promise.all([
       sendPushToRole('guard', pushTitle, pushBody, { url: '/', type: 'sos', flat_number: flatCombined }),
       sendPushToRole('manager', pushTitle, pushBody, { url: '/', type: 'sos', flat_number: flatCombined }),
       sendPushToRole('super_admin', pushTitle, pushBody, { url: '/', type: 'sos', flat_number: flatCombined }),
-      saveNotifForRole(sosSocietyId, ['guard', 'manager'], 'sos', pushTitle, pushBody),
     ]);
+
 
     res.status(201).json({ message: 'SOS sent successfully', id: result.insertId });
   } catch (err) {
@@ -155,13 +152,18 @@ router.post('/manual-log', async (req, res) => {
       }
     }
 
-    // 4. Emit real-time log event & check-in toast to Resident's flat room!
+    // 4. 🔔 Emit VISITOR_NOTIFICATION (full-screen call modal) to Resident's flat room!
+    //    visitor_checked_in only shows a toast — visitor_notification triggers the call popup.
     const io = req.app.get('io');
     if (io && flat_number) {
       const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
       io.to(roomName).emit('entry_log_created');
-      io.to(roomName).emit('visitor_checked_in', {
-        visitor_name: visitor_name
+      io.to(roomName).emit('visitor_notification', {
+        name: visitor_name,
+        phone: visitor_phone || null,
+        purpose: purpose || 'Walk-in',
+        flat_number,
+        tower: tower || null
       });
     }
 
