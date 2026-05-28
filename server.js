@@ -80,7 +80,8 @@ io.on('connection', (socket) => {
   // Visitor arrival at gate — Guard notifies resident
   socket.on('visitor_arrival', (data) => {
     console.log('[Socket] Visitor Arrival:', data);
-    io.to(`flat_${data.flat_number}`).emit('visitor_notification', data);
+    const roomName = `flat_${data.tower ? data.tower + '-' : ''}${data.flat_number}`;
+    io.to(roomName).emit('visitor_notification', data);
   });
 
   // Visitor decision (approve/deny) — Resident notifies guard
