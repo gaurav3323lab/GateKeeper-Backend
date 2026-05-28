@@ -168,12 +168,13 @@ router.post('/manual-log', async (req, res) => {
     // 🔔 Web Push + In-App Notif — Resident ko visitor entry notification
     if (flat_number) {
       // Get society_id for the flat
-      const [sInfo] = await db.execute('SELECT society_id FROM users WHERE flat_number = ? AND role IN (\'resident_primary\',\'resident_family\') LIMIT 1', [flat_number]);
+      const [sInfo] = await db.execute(
+        `SELECT society_id FROM users WHERE COALESCE(tower,'') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary','resident_family') LIMIT 1`,
+        [tower || '', flat_number]
+      );
       const sId = sInfo[0]?.society_id || null;
-      await Promise.all([
-        sendPushToFlat(tower, flat_number, `🚪 Visitor Aaya!`, `${visitor_name} gate par aaye hain. Purpose: ${purpose || 'Walk-in'}`, { url: '/', type: 'visitor', flat_number }),
-        saveNotifForFlat(sId, tower, flat_number, 'visitor', '🚪 Visitor Aaya!', `${visitor_name} gate par aaye hain. Purpose: ${purpose || 'Walk-in'}`)
-      ]);
+      // sendPushToFlat already inserts into in_app_notifications — no need for separate saveNotifForFlat
+      await sendPushToFlat(tower, flat_number, `🚪 Visitor Aaya!`, `${visitor_name} gate par aaye hain. Purpose: ${purpose || 'Walk-in'}`, { url: '/', type: 'visitor', flat_number, society_id: sId });
     }
 
     res.status(201).json({ message: 'Entry logged successfully', id: guestId });
@@ -273,12 +274,13 @@ router.post('/log-preapproved', async (req, res) => {
       const notifTitle = entity_type === 'delivery' ? `📦 Delivery Aayi!` : `✅ Visitor Checked In`;
       const notifMsg = `${visitor_name} society mein enter kar gaye hain.`;
       // Get society_id for this flat
-      const [pInfo] = await db.execute('SELECT society_id FROM users WHERE flat_number = ? AND role IN (\'resident_primary\',\'resident_family\') LIMIT 1', [flat_number]);
+      const [pInfo] = await db.execute(
+        `SELECT society_id FROM users WHERE COALESCE(tower,'') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary','resident_family') LIMIT 1`,
+        [tower || '', flat_number]
+      );
       const pSocId = pInfo[0]?.society_id || null;
-      await Promise.all([
-        sendPushToFlat(tower, flat_number, notifTitle, notifMsg, { url: '/', type: 'checkin', flat_number }),
-        saveNotifForFlat(pSocId, tower, flat_number, entity_type === 'delivery' ? 'delivery' : 'visitor', notifTitle, notifMsg)
-      ]);
+      // sendPushToFlat already inserts into in_app_notifications — no need for separate saveNotifForFlat
+      await sendPushToFlat(tower, flat_number, notifTitle, notifMsg, { url: '/', type: entity_type === 'delivery' ? 'delivery' : 'checkin', flat_number, society_id: pSocId });
     }
 
     res.status(201).json({ message: 'Pre-approved entry logged successfully' });

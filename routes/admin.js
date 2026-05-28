@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const os = require('os');
 const db = require('../config/db');
 const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
+const { sendPushToUser } = require('../utils/sendPush');
 
 // All admin routes require authentication + admin or super_admin role
 router.use(verifyToken);
@@ -329,13 +330,28 @@ router.post('/approve-resident', async (req, res) => {
       [status, userId, req.user.society_id]
     );
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Resident not found in your society' });
+
     const io = req.app.get('io');
-    const [residentRows] = await db.execute(`SELECT tower, flat_number, name FROM users WHERE id = ?`, [userId]);
-    if (residentRows.length > 0 && io) {
-      const { tower, flat_number, name } = residentRows[0];
-      const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
-      io.to(roomName).emit('account_status_update', { status, name });
+    const [residentRows] = await db.execute(
+      `SELECT tower, flat_number, name, society_id FROM users WHERE id = ?`, [userId]
+    );
+    if (residentRows.length > 0) {
+      const { tower, flat_number, name, society_id } = residentRows[0];
+
+      // ✅ Socket notification
+      if (io && flat_number) {
+        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        io.to(roomName).emit('account_status_update', { status, name });
+      }
+
+      // 🔔 Push + In-App Notification
+      const notifTitle = status === 'active' ? '✅ Account Approved!' : '❌ Registration Rejected';
+      const notifMsg = status === 'active'
+        ? `Namaste ${name}! Aapka GateKeeper account activate ho gaya hai. Ab login karein.`
+        : `Aapki registration abhi accept nahi hui. Society manager se milein.`;
+      await sendPushToUser(userId, notifTitle, notifMsg, { url: '/', type: 'approval', status });
     }
+
     res.json({ message: `Resident ${status}` });
   } catch (err) {
     console.error(err);

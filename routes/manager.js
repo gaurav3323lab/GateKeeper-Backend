@@ -4,7 +4,6 @@ const bcrypt = require('bcrypt');
 const db = require('../config/db');
 const { verifyToken, authorizeRoles, roles } = require('../middlewares/auth');
 const { sendPushToUser } = require('../utils/sendPush');
-const { saveNotifForUser } = require('../utils/saveNotif');
 
 // Apply middleware to all manager routes
 router.use(verifyToken);
@@ -28,7 +27,7 @@ router.post('/approve-resident', async (req, res) => {
 
     // ✅ Emit socket notification to the resident's flat
     const [residentRows] = await db.execute(
-      `SELECT tower, flat_number, name FROM users WHERE id = ?`, [userId]
+      `SELECT tower, flat_number, name, society_id FROM users WHERE id = ?`, [userId]
     );
     if (residentRows.length > 0) {
       const io = req.app.get('io');
@@ -49,10 +48,8 @@ router.post('/approve-resident', async (req, res) => {
       const notifMsg = status === 'active'
         ? `Namaste ${name}! Aapka GateKeeper account activate ho gaya hai. Ab login karein.`
         : `Aapki registration abhi accept nahi hui. Society manager se milein.`;
-      await Promise.all([
-        sendPushToUser(userId, notifTitle, notifMsg, { url: '/', type: 'approval', status }),
-        saveNotifForUser(userId, residentRows[0].society_id || null, 'approval', notifTitle, notifMsg)
-      ]);
+      // sendPushToUser already saves to in_app_notifications internally
+      await sendPushToUser(userId, notifTitle, notifMsg, { url: '/', type: 'approval', status });
     }
 
     res.json({ message: `Resident account marked as ${status}` });

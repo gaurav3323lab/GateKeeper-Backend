@@ -181,7 +181,7 @@ async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
     const type = data.type || 'general';
     await db.execute(
       'INSERT INTO in_app_notifications (society_id, tower, flat_number, title, message, type) VALUES (?, ?, ?, ?, ?, ?)',
-      [data.society_id || 1, tower || '', flatNumber, title, body, type] // Using society_id=1 as default if not passed in data
+      [data.society_id || null, tower || '', flatNumber, title, body, type]
     );
   } catch(e) { console.error('DB Insert Error:', e.message); }
 

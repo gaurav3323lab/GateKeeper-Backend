@@ -17,11 +17,12 @@ router.get('/', verifyToken, async (req, res) => {
         SELECT * FROM in_app_notifications 
         WHERE user_id = ? 
            OR (society_id = ? AND tower = ? AND flat_number = ?)
+           OR (tower = ? AND flat_number = ? AND society_id IS NULL AND user_id IS NULL)
            OR (society_id = ? AND tower IS NULL AND flat_number IS NULL AND user_id IS NULL)
         ORDER BY created_at DESC 
         LIMIT 50
       `;
-      params = [user_id, society_id, tower || '', flat_number, society_id];
+      params = [user_id, society_id, tower || '', flat_number, tower || '', flat_number, society_id];
     } else {
       // Guard/Manager/Admin: fetch by user_id OR society-wide
       query = `
@@ -67,9 +68,10 @@ router.put('/read-all', verifyToken, async (req, res) => {
         UPDATE in_app_notifications SET is_read = TRUE
         WHERE user_id = ? 
            OR (society_id = ? AND tower = ? AND flat_number = ?)
+           OR (tower = ? AND flat_number = ? AND society_id IS NULL AND user_id IS NULL)
            OR (society_id = ? AND tower IS NULL AND flat_number IS NULL AND user_id IS NULL)
       `;
-      params = [user_id, society_id, tower || '', flat_number, society_id];
+      params = [user_id, society_id, tower || '', flat_number, tower || '', flat_number, society_id];
     } else {
       query = `
         UPDATE in_app_notifications SET is_read = TRUE
