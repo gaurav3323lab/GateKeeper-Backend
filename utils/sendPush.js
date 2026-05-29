@@ -1,11 +1,32 @@
 const webpush = require('web-push');
 const db = require('../config/db');
+const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 
 // ── Socket.io reference (injected by server.js after startup) ───
 let _io = null;
 function setIO(io) { _io = io; }
 function emitNotif(room, data) {
   try { if (_io && room) _io.to(room).emit('new_notification', data); } catch(e) {}
+}
+
+// ── Firebase Admin SDK Safe Init (Modern FCM HTTP v1) ──────────
+let firebaseApp = null;
+const serviceAccountPath = path.join(__dirname, '../firebase-service-account.json');
+
+if (fs.existsSync(serviceAccountPath)) {
+  try {
+    const serviceAccount = require(serviceAccountPath);
+    firebaseApp = admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log('[Push] Firebase Admin SDK initialized successfully with HTTP v1 API ✅');
+  } catch (err) {
+    console.error('[Push] Failed to initialize Firebase Admin SDK:', err.message);
+  }
+} else {
+  console.warn('[Push] firebase-service-account.json not found at root. Modern FCM HTTP v1 notifications will not be sent.');
 }
 
 // ── VAPID Safe Init ───────────────────────────────────────────
@@ -30,68 +51,108 @@ try {
  * @param {object} data
  */
 async function sendSinglePush(sub, title, body, data = {}) {
-  // 1. Native Mobile FCM Push (100% Free via Legacy/v1 HTTP REST API)
+  // 1. Native Mobile FCM Push (via Modern Firebase Admin HTTP v1, fallback to legacy key)
   if (sub.fcm_token) {
-    try {
-      // Free FCM Server Key (Can be overridden by custom key or set to a secure fallback)
-      const fcmServerKey = process.env.FCM_SERVER_KEY || 'AAAA3x96DJs:APA91bF84f_gQ5R_J4D7K1-v_OUp31q-p_Dk6c';
-      
-      const isVisitorCall = data.type === 'visitor';
+    if (firebaseApp) {
+      try {
+        const isVisitorCall = data.type === 'visitor';
+        
+        const message = {
+          token: sub.fcm_token,
+          android: {
+            priority: 'high', // High priority delivery
+          }
+        };
 
-      const payload = {
-        to: sub.fcm_token,
-        priority: 'high', // 🔥 HIGH priority — Android delivers immediately even if Doze mode
-        collapse_key: isVisitorCall ? 'visitor_call' : undefined,
-      };
+        if (isVisitorCall) {
+          message.android.ttl = 60 * 1000; // 1 min time to live for visitor calls
+          
+          // Pure data payload for MyMessagingService background processing
+          message.data = {
+            ...data,
+            title,
+            body,
+            guest_id: data.guest_id ? String(data.guest_id) : undefined,
+            is_visitor_call: 'true',
+            visitor_name: data.visitor_name || 'Walk-in Visitor',
+            flat_number: data.flat_number || '',
+            purpose: data.purpose || 'Walk-in'
+          };
+        } else {
+          // Normal notification + data for background/foreground Capacitor listener
+          message.notification = {
+            title,
+            body
+          };
+          message.data = {
+            ...data,
+            title,
+            body
+          };
+        }
 
-      if (isVisitorCall) {
-        // 🔥 Android Background full-screen incoming call jugaad:
-        // Pure data message to force MyMessagingService.onMessageReceived() to run in background.
-        payload.data = {
-          ...data,
-          title,
-          body,
-          guest_id: data.guest_id ? String(data.guest_id) : undefined,
-          is_visitor_call: 'true',
-          visitor_name: data.visitor_name || 'Walk-in Visitor',
-          flat_number: data.flat_number || '',
-          purpose: data.purpose || 'Walk-in'
-        };
-      } else {
-        payload.notification = {
-          title,
-          body,
-          sound: 'default',
-          click_action: 'FCM_PLUGIN_ACTIVITY',
-          android_channel_id: 'default',
-          notification_priority: 'PRIORITY_HIGH',
-          visibility: 'PRIVATE',
-        };
-        payload.data = {
-          ...data,
-          title,
-          body,
-        };
+        const response = await admin.messaging().send(message);
+        console.log(`[Push] Mobile FCM v1 notification sent successfully to sub ID: ${sub.id}`);
+      } catch (fcmErr) {
+        console.error(`[Push] Mobile FCM v1 dispatch failed for sub ID: ${sub.id}:`, fcmErr.message);
       }
+    } else {
+      // Legacy Fallback (Returns 404 on modern accounts but preserved as safe fallback)
+      try {
+        const fcmServerKey = process.env.FCM_SERVER_KEY || 'AAAA3x96DJs:APA91bF84f_gQ5R_J4D7K1-v_OUp31q-p_Dk6c';
+        const isVisitorCall = data.type === 'visitor';
+        const payload = {
+          to: sub.fcm_token,
+          priority: 'high',
+          collapse_key: isVisitorCall ? 'visitor_call' : undefined,
+        };
 
+        if (isVisitorCall) {
+          payload.data = {
+            ...data,
+            title,
+            body,
+            guest_id: data.guest_id ? String(data.guest_id) : undefined,
+            is_visitor_call: 'true',
+            visitor_name: data.visitor_name || 'Walk-in Visitor',
+            flat_number: data.flat_number || '',
+            purpose: data.purpose || 'Walk-in'
+          };
+        } else {
+          payload.notification = {
+            title,
+            body,
+            sound: 'default',
+            click_action: 'FCM_PLUGIN_ACTIVITY',
+            android_channel_id: 'default',
+            notification_priority: 'PRIORITY_HIGH',
+            visibility: 'PRIVATE',
+          };
+          payload.data = {
+            ...data,
+            title,
+            body,
+          };
+        }
 
-      const response = await fetch('https://fcm.googleapis.com/fcm/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `key=${fcmServerKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+        const response = await fetch('https://fcm.googleapis.com/fcm/send', {
+          method: 'POST',
+          headers: {
+            'Authorization': `key=${fcmServerKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
 
-      if (response.ok) {
-        console.log(`[Push] Mobile FCM notification sent successfully to sub ID: ${sub.id}`);
-      } else {
-        const errText = await response.text();
-        console.error(`[Push] Mobile FCM notification failed for sub ID: ${sub.id}:`, errText);
+        if (response.ok) {
+          console.log(`[Push] Mobile FCM notification sent successfully to sub ID: ${sub.id}`);
+        } else {
+          const errText = await response.text();
+          console.error(`[Push] Mobile FCM notification failed for sub ID: ${sub.id}:`, errText);
+        }
+      } catch (fcmErr) {
+        console.error(`[Push] Mobile FCM dispatch exception:`, fcmErr.message);
       }
-    } catch (fcmErr) {
-      console.error(`[Push] Mobile FCM dispatch exception:`, fcmErr.message);
     }
     return;
   }
