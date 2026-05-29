@@ -101,7 +101,7 @@ router.post('/sos', async (req, res) => {
 // POST /api/entry/manual-log
 // Guard manually logs a visitor entry with full details
 router.post('/manual-log', async (req, res) => {
-  const { visitor_name, visitor_phone, tower, flat_number, purpose, guard_id, vehicle_number } = req.body;
+  const { visitor_name, visitor_phone, tower, flat_number, purpose, guard_id, vehicle_number, guest_id } = req.body;
   if (!visitor_name || !flat_number) return res.status(400).json({ message: 'visitor_name and flat_number required' });
 
   try {
@@ -126,30 +126,63 @@ router.post('/manual-log', async (req, res) => {
     const hostId = users.length > 0 ? users[0].id : null;
     const residentSocietyId = users.length > 0 ? users[0].society_id : guardSocietyId;
 
-    // 2. Insert into guests table with approval_status = 'pending'
-    // Auto-heal: try with approval_status, fallback without if column missing
+    // 2. Insert into or update existing guests table record
     let guestId;
-    try {
-      const [guestResult] = await db.execute(
-        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
-         VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
-        [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
-      );
-      guestId = guestResult.insertId;
-    } catch (colErr) {
-      if (colErr.code === 'ER_BAD_FIELD_ERROR') {
-        // Column doesn't exist yet — add it and retry
-        console.log('[Auto-Heal] Adding approval_status column to guests...');
-        try {
-          await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
-        } catch (e) { /* already exists */ }
+    let existingGuest = null;
+    if (guest_id) {
+      try {
+        const [gRows] = await db.execute('SELECT id FROM guests WHERE id = ?', [guest_id]);
+        if (gRows.length > 0) {
+          existingGuest = gRows[0].id;
+        }
+      } catch (err) {
+        console.warn('Failed to query existing guest_id:', err.message);
+      }
+    }
+
+    if (existingGuest) {
+      guestId = existingGuest;
+      // Update existing guest info and mark approved
+      try {
+        await db.execute(
+          `UPDATE guests 
+           SET name = ?, phone = ?, purpose = ?, host_id = ?, approval_status = 'approved' 
+           WHERE id = ?`,
+          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId, guestId]
+        );
+      } catch (colErr) {
+        // Fallback if column missing or has errors
+        await db.execute(
+          `UPDATE guests 
+           SET name = ?, phone = ?, purpose = ?, host_id = ? 
+           WHERE id = ?`,
+          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId, guestId]
+        );
+      }
+    } else {
+      // Auto-heal: try with approval_status, fallback without if column missing
+      try {
         const [guestResult] = await db.execute(
           `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
            VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
           [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
         );
         guestId = guestResult.insertId;
-      } else throw colErr;
+      } catch (colErr) {
+        if (colErr.code === 'ER_BAD_FIELD_ERROR') {
+          // Column doesn't exist yet — add it and retry
+          console.log('[Auto-Heal] Adding approval_status column to guests...');
+          try {
+            await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
+          } catch (e) { /* already exists */ }
+          const [guestResult] = await db.execute(
+            `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
+             VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
+            [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
+          );
+          guestId = guestResult.insertId;
+        } else throw colErr;
+      }
     }
 
 
@@ -674,7 +707,8 @@ router.put('/resolve-visitor/:id', verifyToken, async (req, res) => {
         approved: decision === 'approved',
         tower: req.user.tower,
         flat_number: req.user.flat_number,
-        visitor_name: gRows[0]?.name || 'Visitor'
+        visitor_name: gRows[0]?.name || 'Visitor',
+        guest_id: id
       });
     }
 

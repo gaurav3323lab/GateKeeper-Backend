@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
+const db = require('./config/db');
 const { setIO } = require('./utils/sendPush');
 
 dotenv.config();
@@ -92,10 +93,96 @@ io.on('connection', (socket) => {
   });
 
   // Visitor arrival at gate — Guard notifies resident
-  socket.on('visitor_arrival', (data) => {
+  socket.on('visitor_arrival', async (data) => {
     console.log('[Socket] Visitor Arrival:', data);
-    const roomName = `flat_${data.tower ? data.tower + '-' : ''}${data.flat_number}`;
-    io.to(roomName).emit('visitor_notification', data);
+    
+    // Resolve society_id
+    let societyId = data.society_id || null;
+    
+    // Fetch society_id from guard's DB entry using socket.userId if not provided
+    if (!societyId && socket.userId) {
+      try {
+        const [gRows] = await db.execute('SELECT society_id FROM users WHERE id = ?', [socket.userId]);
+        if (gRows.length > 0) {
+          societyId = gRows[0].society_id;
+        }
+      } catch (err) {
+        console.error('Failed to fetch society_id for guard socket:', err.message);
+      }
+    }
+    
+    // Fallback to society_id = 1
+    if (!societyId) {
+      societyId = 1;
+    }
+
+    let guestId = null;
+    let residentSocietyId = societyId;
+
+    try {
+      // 1. Find resident host_id matching tower, flat number, and society_id
+      const [users] = await db.execute(
+        `SELECT id, society_id FROM users 
+         WHERE COALESCE(tower, '') = CAST(? AS CHAR) 
+           AND flat_number = ? 
+           AND role IN ('resident_primary', 'resident_family')
+           AND society_id = ? 
+         LIMIT 1`,
+        [data.tower || '', data.flat_number, societyId]
+      );
+      
+      const hostId = users.length > 0 ? users[0].id : null;
+      if (users.length > 0) {
+        residentSocietyId = users[0].society_id;
+      }
+
+      // 2. Insert into guests table with approval_status = 'pending'
+      const [guestResult] = await db.execute(
+        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
+         VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
+        [data.name, data.phone || 'N/A', data.purpose || 'Walk-in', hostId]
+      );
+      guestId = guestResult.insertId;
+    } catch (dbErr) {
+      console.error('Failed to create guest record in visitor_arrival:', dbErr.message);
+    }
+
+    const payload = {
+      guest_id: guestId,
+      name: data.name,
+      phone: data.phone || null,
+      purpose: data.purpose || 'Guest',
+      flat_number: data.flat_number,
+      tower: data.tower || null,
+      society_id: residentSocietyId
+    };
+
+    // Emit real-time Socket event to isolated flat room (with society_id prefix)
+    const roomName = `society_${residentSocietyId}_flat_${data.tower ? data.tower + '-' : ''}${data.flat_number}`;
+    io.to(roomName).emit('visitor_notification', payload);
+
+    // Call sendPushToFlat to trigger high-priority background FCM call alert!
+    try {
+      const { sendPushToFlat } = require('./utils/sendPush');
+      await sendPushToFlat(
+        data.tower,
+        data.flat_number,
+        `🚪 Visitor Aaya!`,
+        `${data.name} gate par hain. Purpose: ${data.purpose || 'Guest'} — Tap karke approve/deny karein`,
+        { 
+          url: guestId ? `/?pending_visitor=${guestId}` : `/?visitor_name=${data.name}`, 
+          type: 'visitor', 
+          flat_number: data.flat_number, 
+          society_id: residentSocietyId, 
+          guest_id: guestId, 
+          visitor_name: data.name, 
+          purpose: data.purpose || 'Guest' 
+        }
+      );
+      console.log(`[Socket] Push sent to flat for visitor arrival: ${data.name}`);
+    } catch (pushErr) {
+      console.error('Failed to send push in visitor_arrival:', pushErr.message);
+    }
   });
 
   // Visitor decision (approve/deny) — Resident notifies guard
@@ -148,7 +235,6 @@ app.use('/api/notifications', require('./routes/notifications'));
 // ── Auto-Migration on Startup ─────────────────────────────────
 // Nayi tables automatically create ho jayengi agar exist nahi karti
 // Hostinger par manual migration ki zaroorat nahi padegi
-const db = require('./config/db');
 async function autoMigrate() {
   try {
     // Add tower columns safely
