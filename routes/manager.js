@@ -31,9 +31,9 @@ router.post('/approve-resident', async (req, res) => {
     );
     if (residentRows.length > 0) {
       const io = req.app.get('io');
-      const { tower, flat_number, name } = residentRows[0];
+      const { tower, flat_number, name, society_id } = residentRows[0];
       if (io && flat_number) {
-        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        const roomName = `society_${society_id}_flat_${tower ? tower + '-' : ''}${flat_number}`;
         io.to(roomName).emit('account_status_update', {
           status,
           message: status === 'active'

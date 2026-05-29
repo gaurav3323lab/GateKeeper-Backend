@@ -290,7 +290,7 @@ router.post('/checkout-visitor', async (req, res) => {
           WHEN el.entity_type = 'delivery' THEN d.company
           ELSE 'Visitor'
         END AS name,
-        u.tower, u.flat_number
+        u.tower, u.flat_number, u.society_id
       FROM entry_logs el
       LEFT JOIN guests g ON el.entity_type = 'guest' AND el.entity_id = g.id
       LEFT JOIN deliveries d ON el.entity_type = 'delivery' AND el.entity_id = d.id
@@ -299,10 +299,10 @@ router.post('/checkout-visitor', async (req, res) => {
     `, [log_id]);
 
     if (rows.length > 0) {
-      const { name, tower, flat_number } = rows[0];
+      const { name, tower, flat_number, society_id } = rows[0];
       const io = req.app.get('io');
       if (io && flat_number) {
-        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        const roomName = `society_${society_id}_flat_${tower ? tower + '-' : ''}${flat_number}`;
         io.to(roomName).emit('entry_log_created');
         io.to(roomName).emit('visitor_checked_out', {
           visitor_name: name
@@ -311,14 +311,8 @@ router.post('/checkout-visitor', async (req, res) => {
 
       // 🔔 Web Push + In-App Notif — Resident ko checkout notification
       if (flat_number) {
-        // Fetch society_id for flat (with tower filter for accuracy)
-        const [cInfo] = await db.execute(
-          `SELECT society_id FROM users WHERE COALESCE(tower,'') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary','resident_family') LIMIT 1`,
-          [tower || '', flat_number]
-        );
-        const cSocId = cInfo[0]?.society_id || null;
         // sendPushToFlat already inserts into in_app_notifications — no need for saveNotifForFlat
-        await sendPushToFlat(tower, flat_number, `🚶 Visitor Chale Gaye`, `${name} society se bahar nikal gaye hain.`, { url: '/', type: 'checkout', flat_number, society_id: cSocId });
+        await sendPushToFlat(tower, flat_number, `🚶 Visitor Chale Gaye`, `${name} society se bahar nikal gaye hain.`, { url: '/', type: 'checkout', flat_number, society_id });
       }
     }
 
@@ -338,7 +332,7 @@ router.post('/vehicle-log', async (req, res) => {
   try {
     // Fetch vehicle and owner info
     const [vehicleRows] = await db.execute(
-      `SELECT v.vehicle_number, v.type, v.brand, u.id AS owner_id, u.tower, u.flat_number, u.name AS owner_name
+      `SELECT v.vehicle_number, v.type, v.brand, u.id AS owner_id, u.tower, u.flat_number, u.name AS owner_name, u.society_id
        FROM vehicles v JOIN users u ON v.user_id = u.id
        WHERE v.id = ?`,
       [vehicle_id]
@@ -358,7 +352,7 @@ router.post('/vehicle-log', async (req, res) => {
       // Socket broadcast
       const io = req.app.get('io');
       if (io) {
-        const roomName = `flat_${vehicle.tower ? vehicle.tower + '-' : ''}${vehicle.flat_number}`;
+        const roomName = `society_${vehicle.society_id}_flat_${vehicle.tower ? vehicle.tower + '-' : ''}${vehicle.flat_number}`;
         io.to(roomName).emit('entry_log_created');
       }
 
@@ -381,7 +375,7 @@ router.post('/vehicle-log', async (req, res) => {
       // Socket broadcast
       const io = req.app.get('io');
       if (io) {
-        const roomName = `flat_${vehicle.tower ? vehicle.tower + '-' : ''}${vehicle.flat_number}`;
+        const roomName = `society_${vehicle.society_id}_flat_${vehicle.tower ? vehicle.tower + '-' : ''}${vehicle.flat_number}`;
         io.to(roomName).emit('entry_log_created');
       }
 

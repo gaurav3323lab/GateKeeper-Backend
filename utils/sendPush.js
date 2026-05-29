@@ -215,25 +215,29 @@ async function sendPushToSociety(societyId, title, body, data = {}) {
  */
 async function sendPushToFlat(tower, flatNumber, title, body, data = {}) {
   const type = data.type || 'general';
+  const societyId = data.society_id || null;
   try {
     await db.execute(
       'INSERT INTO in_app_notifications (society_id, tower, flat_number, title, message, type) VALUES (?, ?, ?, ?, ?, ?)',
-      [data.society_id || null, tower || '', flatNumber, title, body, type]
+      [societyId, tower || '', flatNumber, title, body, type]
     );
     // Emit to the flat's socket room so bell updates in realtime
-    const flatRoom = `flat_${tower ? tower + '-' : ''}${flatNumber}`;
+    const flatRoom = `society_${societyId}_flat_${tower ? tower + '-' : ''}${flatNumber}`;
     emitNotif(flatRoom, { type, title, body });
   } catch(e) { console.error('DB Insert Error:', e.message); }
 
   if (!pushEnabled) return;
   try {
-    const [subs] = await db.execute(
-      `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
-       FROM push_subscriptions ps
-       JOIN users u ON ps.user_id = u.id
-       WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`,
-      [tower || null, flatNumber]
-    );
+    let query = `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.fcm_token, ps.platform
+                 FROM push_subscriptions ps
+                 JOIN users u ON ps.user_id = u.id
+                 WHERE COALESCE(u.tower, '') = CAST(? AS CHAR) AND u.flat_number = ? AND u.role IN ('resident_primary', 'resident_family')`;
+    let params = [tower || null, flatNumber];
+    if (societyId) {
+      query += ` AND u.society_id = ?`;
+      params.push(societyId);
+    }
+    const [subs] = await db.execute(query, params);
     if (!subs.length) return;
 
     await Promise.allSettled(subs.map(sub => sendSinglePush(sub, title, body, data)));

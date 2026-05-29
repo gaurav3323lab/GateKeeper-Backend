@@ -105,13 +105,26 @@ router.post('/manual-log', async (req, res) => {
   if (!visitor_name || !flat_number) return res.status(400).json({ message: 'visitor_name and flat_number required' });
 
   try {
-    // 1. Find resident host_id matching the tower and flat number (roles primary/family)
+    // Get guard's society_id to match residents of the same society
+    let guardSocietyId = null;
+    if (guard_id) {
+      const [gRows] = await db.execute('SELECT society_id FROM users WHERE id = ?', [guard_id]);
+      guardSocietyId = gRows[0]?.society_id || null;
+    }
+
+    // 1. Find resident host_id matching the tower, flat number, and society_id
     const [users] = await db.execute(
-      `SELECT id FROM users WHERE COALESCE(tower, '') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary', 'resident_family') LIMIT 1`,
-      [tower || '', flat_number]
+      `SELECT id, society_id FROM users 
+       WHERE COALESCE(tower, '') = CAST(? AS CHAR) 
+         AND flat_number = ? 
+         AND role IN ('resident_primary', 'resident_family')
+         ${guardSocietyId ? 'AND society_id = ?' : ''} 
+       LIMIT 1`,
+      guardSocietyId ? [tower || '', flat_number, guardSocietyId] : [tower || '', flat_number]
     );
     
     const hostId = users.length > 0 ? users[0].id : null;
+    const residentSocietyId = users.length > 0 ? users[0].society_id : guardSocietyId;
 
     // 2. Insert into guests table with approval_status = 'pending'
     // Auto-heal: try with approval_status, fallback without if column missing
@@ -171,10 +184,9 @@ router.post('/manual-log', async (req, res) => {
     }
 
     // 4. 🔔 Emit VISITOR_NOTIFICATION (full-screen call modal) to Resident's flat room!
-    //    visitor_checked_in only shows a toast — visitor_notification triggers the call popup.
     const io = req.app.get('io');
     if (io && flat_number) {
-      const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+      const roomName = `society_${residentSocietyId}_flat_${tower ? tower + '-' : ''}${flat_number}`;
       io.to(roomName).emit('entry_log_created');
       io.to(roomName).emit('visitor_notification', {
         guest_id: guestId,
@@ -187,20 +199,12 @@ router.post('/manual-log', async (req, res) => {
     }
 
     // 🔔 Web Push + In-App Notif — Resident ko visitor entry notification
-    // Push notification mein /?pending_visitor=GUEST_ID URL bhejo
-    // Jab resident notification tap kare, app khule aur modal auto-show ho
     if (flat_number) {
-      // Get society_id for the flat
-      const [sInfo] = await db.execute(
-        `SELECT society_id FROM users WHERE COALESCE(tower,'') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary','resident_family') LIMIT 1`,
-        [tower || '', flat_number]
-      );
-      const sId = sInfo[0]?.society_id || null;
       await sendPushToFlat(
         tower, flat_number,
         `🚪 Visitor Aaya!`,
         `${visitor_name} gate par hain. Purpose: ${purpose || 'Walk-in'} — Tap karke approve/deny karein`,
-        { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: sId, guest_id: guestId, visitor_name, purpose: purpose || 'Walk-in' }
+        { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: residentSocietyId, guest_id: guestId, visitor_name, purpose: purpose || 'Walk-in' }
       );
     }
 
@@ -269,28 +273,31 @@ router.post('/log-preapproved', async (req, res) => {
     let tower = '';
     let flat_number = '';
     let visitor_name = 'Visitor';
+    let society_id = null;
     if (entity_type === 'guest') {
       const [rows] = await db.execute(
-        `SELECT u.tower, u.flat_number, g.name FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
+        `SELECT u.tower, u.flat_number, g.name, u.society_id FROM guests g JOIN users u ON g.host_id = u.id WHERE g.id = ?`,
         [entity_id]
       );
       tower = rows[0]?.tower || '';
       flat_number = rows[0]?.flat_number || '';
       visitor_name = rows[0]?.name || 'Guest';
+      society_id = rows[0]?.society_id || null;
     } else if (entity_type === 'delivery') {
       const [rows] = await db.execute(
-        `SELECT u.tower, u.flat_number, d.company FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
+        `SELECT u.tower, u.flat_number, d.company, u.society_id FROM deliveries d JOIN users u ON d.resident_id = u.id WHERE d.id = ?`,
         [entity_id]
       );
       tower = rows[0]?.tower || '';
       flat_number = rows[0]?.flat_number || '';
       visitor_name = rows[0]?.company || 'Delivery';
+      society_id = rows[0]?.society_id || null;
     }
 
     if (flat_number) {
       const io = req.app.get('io');
       if (io) {
-        const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
+        const roomName = `society_${society_id}_flat_${tower ? tower + '-' : ''}${flat_number}`;
         io.to(roomName).emit('entry_log_created');
         io.to(roomName).emit('visitor_checked_in', {
           visitor_name: visitor_name
@@ -300,14 +307,8 @@ router.post('/log-preapproved', async (req, res) => {
       // 🔔 Web Push + In-App Notif — Resident ko pre-approved entry notification
       const notifTitle = entity_type === 'delivery' ? `📦 Delivery Aayi!` : `✅ Visitor Checked In`;
       const notifMsg = `${visitor_name} society mein enter kar gaye hain.`;
-      // Get society_id for this flat
-      const [pInfo] = await db.execute(
-        `SELECT society_id FROM users WHERE COALESCE(tower,'') = CAST(? AS CHAR) AND flat_number = ? AND role IN ('resident_primary','resident_family') LIMIT 1`,
-        [tower || '', flat_number]
-      );
-      const pSocId = pInfo[0]?.society_id || null;
       // sendPushToFlat already inserts into in_app_notifications — no need for separate saveNotifForFlat
-      await sendPushToFlat(tower, flat_number, notifTitle, notifMsg, { url: '/', type: entity_type === 'delivery' ? 'delivery' : 'checkin', flat_number, society_id: pSocId });
+      await sendPushToFlat(tower, flat_number, notifTitle, notifMsg, { url: '/', type: entity_type === 'delivery' ? 'delivery' : 'checkin', flat_number, society_id });
     }
 
     res.status(201).json({ message: 'Pre-approved entry logged successfully' });
@@ -627,11 +628,12 @@ router.get('/pending-visitor', verifyToken, async (req, res) => {
        JOIN users u ON g.host_id = u.id
        WHERE COALESCE(u.tower, '') = CAST(? AS CHAR)
          AND u.flat_number = ?
+         AND u.society_id = ?
          AND g.approval_status = 'pending'
          AND g.created_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
        ORDER BY g.created_at DESC
        LIMIT 1`,
-      [tower || '', flat_number]
+      [tower || '', flat_number, req.user.society_id || null]
     );
 
     if (rows.length === 0) return res.json({ visitor: null });
