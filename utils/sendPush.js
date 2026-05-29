@@ -42,30 +42,37 @@ async function sendSinglePush(sub, title, body, data = {}) {
         to: sub.fcm_token,
         priority: 'high', // 🔥 HIGH priority — Android delivers immediately even if Doze mode
         collapse_key: isVisitorCall ? 'visitor_call' : undefined,
-        notification: {
-          title,
-          body,
-          sound: isVisitorCall ? 'default' : 'default',
-          click_action: 'FCM_PLUGIN_ACTIVITY',
-          // 🔥 JUGAAD: NoBrokerHood jaisi full-screen call notification
-          android_channel_id: isVisitorCall ? 'visitor_calls' : 'default',
-          notification_priority: isVisitorCall ? 'PRIORITY_MAX' : 'PRIORITY_HIGH',
-          // use_full_screen_intent: Screen lock pe bhi call screen dikhata hai!
-          use_full_screen_intent: isVisitorCall ? true : undefined,
-          // visibility PUBLIC: Lock screen pe bhi content dikhata hai
-          visibility: isVisitorCall ? 'PUBLIC' : 'PRIVATE',
-          // Vibration pattern for visitor call
-          default_vibrate_timings: isVisitorCall,
-          default_light_settings: isVisitorCall,
-        },
-        data: {
+      };
+
+      if (isVisitorCall) {
+        // 🔥 Android Background full-screen incoming call jugaad:
+        // Pure data message to force MyMessagingService.onMessageReceived() to run in background.
+        payload.data = {
           ...data,
           title,
           body,
-          // guest_id pass karo taaki frontend pending visitor fetch karke modal dikha sake
           guest_id: data.guest_id ? String(data.guest_id) : undefined,
-        }
-      };
+          is_visitor_call: 'true',
+          visitor_name: data.visitor_name || 'Walk-in Visitor',
+          flat_number: data.flat_number || '',
+          purpose: data.purpose || 'Walk-in'
+        };
+      } else {
+        payload.notification = {
+          title,
+          body,
+          sound: 'default',
+          click_action: 'FCM_PLUGIN_ACTIVITY',
+          android_channel_id: 'default',
+          notification_priority: 'PRIORITY_HIGH',
+          visibility: 'PRIVATE',
+        };
+        payload.data = {
+          ...data,
+          title,
+          body,
+        };
+      }
 
 
       const response = await fetch('https://fcm.googleapis.com/fcm/send', {
