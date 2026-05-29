@@ -200,7 +200,7 @@ router.post('/manual-log', async (req, res) => {
         tower, flat_number,
         `🚪 Visitor Aaya!`,
         `${visitor_name} gate par hain. Purpose: ${purpose || 'Walk-in'} — Tap karke approve/deny karein`,
-        { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: sId, guest_id: guestId }
+        { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: sId, guest_id: guestId, visitor_name, purpose: purpose || 'Walk-in' }
       );
     }
 
