@@ -113,14 +113,32 @@ router.post('/manual-log', async (req, res) => {
     
     const hostId = users.length > 0 ? users[0].id : null;
 
-    // 2. Insert into guests table
-    const [guestResult] = await db.execute(
-      `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to)
-       VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY))`,
-      [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
-    );
+    // 2. Insert into guests table with approval_status = 'pending'
+    // Auto-heal: try with approval_status, fallback without if column missing
+    let guestId;
+    try {
+      const [guestResult] = await db.execute(
+        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
+         VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
+        [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
+      );
+      guestId = guestResult.insertId;
+    } catch (colErr) {
+      if (colErr.code === 'ER_BAD_FIELD_ERROR') {
+        // Column doesn't exist yet — add it and retry
+        console.log('[Auto-Heal] Adding approval_status column to guests...');
+        try {
+          await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
+        } catch (e) { /* already exists */ }
+        const [guestResult] = await db.execute(
+          `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
+           VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
+          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
+        );
+        guestId = guestResult.insertId;
+      } else throw colErr;
+    }
 
-    const guestId = guestResult.insertId;
 
     // 3. Insert into entry_logs table so it shows up in Resident's activity logs!
     const insertLog = async () => {
@@ -159,6 +177,7 @@ router.post('/manual-log', async (req, res) => {
       const roomName = `flat_${tower ? tower + '-' : ''}${flat_number}`;
       io.to(roomName).emit('entry_log_created');
       io.to(roomName).emit('visitor_notification', {
+        guest_id: guestId,
         name: visitor_name,
         phone: visitor_phone || null,
         purpose: purpose || 'Walk-in',
@@ -168,6 +187,8 @@ router.post('/manual-log', async (req, res) => {
     }
 
     // 🔔 Web Push + In-App Notif — Resident ko visitor entry notification
+    // Push notification mein /?pending_visitor=GUEST_ID URL bhejo
+    // Jab resident notification tap kare, app khule aur modal auto-show ho
     if (flat_number) {
       // Get society_id for the flat
       const [sInfo] = await db.execute(
@@ -175,8 +196,12 @@ router.post('/manual-log', async (req, res) => {
         [tower || '', flat_number]
       );
       const sId = sInfo[0]?.society_id || null;
-      // sendPushToFlat already inserts into in_app_notifications — no need for separate saveNotifForFlat
-      await sendPushToFlat(tower, flat_number, `🚪 Visitor Aaya!`, `${visitor_name} gate par aaye hain. Purpose: ${purpose || 'Walk-in'}`, { url: '/', type: 'visitor', flat_number, society_id: sId });
+      await sendPushToFlat(
+        tower, flat_number,
+        `🚪 Visitor Aaya!`,
+        `${visitor_name} gate par hain. Purpose: ${purpose || 'Walk-in'} — Tap karke approve/deny karein`,
+        { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: sId, guest_id: guestId }
+      );
     }
 
     res.status(201).json({ message: 'Entry logged successfully', id: guestId });
@@ -582,4 +607,81 @@ router.get('/society-contacts', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/entry/pending-visitor
+// Resident ka app open hone par check karo — koi visitor gate pe wait kar raha hai kya?
+// Returns the most recent 'pending' visitor for this resident's flat (within last 15 min)
+router.get('/pending-visitor', verifyToken, async (req, res) => {
+  const { flat_number, tower } = req.user;
+  if (!flat_number) return res.json({ visitor: null });
+
+  try {
+    // Auto-heal: agar approval_status column nahi hai toh create karo
+    try {
+      await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
+      console.log('[Auto-Heal] approval_status column added to guests');
+    } catch (e) { /* column already exists — ignore */ }
+
+    const [rows] = await db.execute(
+      `SELECT g.id AS guest_id, g.name, g.phone, g.purpose, g.approval_status, g.created_at
+       FROM guests g
+       JOIN users u ON g.host_id = u.id
+       WHERE COALESCE(u.tower, '') = CAST(? AS CHAR)
+         AND u.flat_number = ?
+         AND g.approval_status = 'pending'
+         AND g.created_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+       ORDER BY g.created_at DESC
+       LIMIT 1`,
+      [tower || '', flat_number]
+    );
+
+    if (rows.length === 0) return res.json({ visitor: null });
+
+    res.json({
+      visitor: {
+        guest_id: rows[0].guest_id,
+        name: rows[0].name,
+        phone: rows[0].phone,
+        purpose: rows[0].purpose,
+        created_at: rows[0].created_at
+      }
+    });
+  } catch (err) {
+    console.error('Pending visitor check error:', err.message);
+    res.json({ visitor: null }); // Always return safely — don't break app load
+  }
+});
+
+// PUT /api/entry/resolve-visitor/:id
+// Resident approves or denies the pending visitor (from modal when app opens via push tap)
+router.put('/resolve-visitor/:id', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { decision } = req.body; // 'approved' or 'denied'
+  if (!decision) return res.status(400).json({ message: 'decision required (approved/denied)' });
+
+  try {
+    await db.execute(
+      `UPDATE guests SET approval_status = ? WHERE id = ? AND approval_status = 'pending'`,
+      [decision, id]
+    );
+
+    // Notify guard of the decision via socket
+    const io = req.app.get('io');
+    if (io) {
+      const [gRows] = await db.execute(`SELECT name FROM guests WHERE id = ?`, [id]);
+      io.to('guard_room').emit('visitor_decision_result', {
+        approved: decision === 'approved',
+        tower: req.user.tower,
+        flat_number: req.user.flat_number,
+        visitor_name: gRows[0]?.name || 'Visitor'
+      });
+    }
+
+    res.json({ message: `Visitor ${decision}` });
+  } catch (err) {
+    console.error('Resolve visitor error:', err.message);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 module.exports = router;
+
