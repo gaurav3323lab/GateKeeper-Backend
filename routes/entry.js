@@ -221,24 +221,44 @@ router.post('/manual-log', async (req, res) => {
     if (io && flat_number) {
       const roomName = `society_${residentSocietyId}_flat_${tower ? tower + '-' : ''}${flat_number}`;
       io.to(roomName).emit('entry_log_created');
-      io.to(roomName).emit('visitor_notification', {
-        guest_id: guestId,
-        name: visitor_name,
-        phone: visitor_phone || null,
-        purpose: purpose || 'Walk-in',
-        flat_number,
-        tower: tower || null
-      });
+      
+      if (!existingGuest) {
+        // Only trigger full-screen calling modal if it's a new direct manual log (not already approved)
+        io.to(roomName).emit('visitor_notification', {
+          guest_id: guestId,
+          name: visitor_name,
+          phone: visitor_phone || null,
+          purpose: purpose || 'Walk-in',
+          flat_number,
+          tower: tower || null
+        });
+      } else {
+        // If already approved, show a nice check-in toast to the resident!
+        io.to(roomName).emit('visitor_checked_in', {
+          visitor_name
+        });
+      }
     }
 
     // 🔔 Web Push + In-App Notif — Resident ko visitor entry notification
     if (flat_number) {
-      await sendPushToFlat(
-        tower, flat_number,
-        `🚪 Visitor Aaya!`,
-        `${visitor_name} gate par hain. Purpose: ${purpose || 'Walk-in'} — Tap karke approve/deny karein`,
-        { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: residentSocietyId, guest_id: guestId, visitor_name, purpose: purpose || 'Walk-in' }
-      );
+      if (!existingGuest) {
+        // Full-screen calling notification
+        await sendPushToFlat(
+          tower, flat_number,
+          `🚪 Visitor Aaya!`,
+          `${visitor_name} gate par hain. Purpose: ${purpose || 'Walk-in'} — Tap karke approve/deny karein`,
+          { url: `/?pending_visitor=${guestId}`, type: 'visitor', flat_number, society_id: residentSocietyId, guest_id: guestId, visitor_name, purpose: purpose || 'Walk-in' }
+        );
+      } else {
+        // Standard check-in notification (non-calling)
+        await sendPushToFlat(
+          tower, flat_number,
+          `🚪 Entry Approved!`,
+          `${visitor_name} ne society mein ENTRY ki hai.`,
+          { url: `/`, type: 'entry', flat_number, society_id: residentSocietyId }
+        );
+      }
     }
 
     res.status(201).json({ message: 'Entry logged successfully', id: guestId });
