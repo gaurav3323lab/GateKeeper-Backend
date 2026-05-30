@@ -24,15 +24,17 @@ router.post('/register', async (req, res) => {
       [name, phone, password_hash, role, tower || null, flat_number || null, society_id]
     );
 
-    // Emit event to managers
+    // Emit event to managers (only if socket server is ready)
     const io = req.app.get('io');
-    io.to('manager_room').emit('new_approval_request', {
-      id: result.insertId,
-      name,
-      tower,
-      flat_number,
-      phone
-    });
+    if (io) {
+      io.to('manager_room').emit('new_approval_request', {
+        id: result.insertId,
+        name,
+        tower,
+        flat_number,
+        phone
+      });
+    }
 
     res.status(201).json({ 
       message: 'Registration successful! Please wait for Manager approval before logging in.',
@@ -156,91 +158,16 @@ router.put('/profile', verifyToken, async (req, res) => {
   }
 });
 
-// TEMPORARY SETUP ROUTE — Creates Super Admin with fresh hash
-// Visit: /api/auth/setup-admin once, then it auto-disables
-router.get('/setup-admin', async (req, res) => {
-  try {
-    const password_hash = await bcrypt.hash('1234', 10);
-
-    // Ensure default society exists
-    await db.execute(`
-      INSERT INTO societies (id, name, society_code, address, city, state, zip_code)
-      VALUES (1, 'Gaurav Heights', 'GH001', 'Sector 23', 'Mumbai', 'Maharashtra', '400001')
-      ON DUPLICATE KEY UPDATE name = name
-    `);
-
-    // Delete old super admin if exists, then insert fresh
-    await db.execute(`DELETE FROM users WHERE phone = '9999999999'`);
-    await db.execute(
-      `INSERT INTO users (name, phone, password_hash, role, account_status, society_id)
-       VALUES ('Super Admin', '9999999999', ?, 'super_admin', 'active', 1)`,
-      [password_hash]
-    );
-
-    res.json({
-      message: '✅ Super Admin created successfully!',
-      phone: '9999999999',
-      password: '1234'
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Setup failed', error: err.message });
-  }
+// TEMPORARY SETUP ROUTE — DISABLED IN PRODUCTION
+// Uncomment locally only. Never expose this on a live server.
+router.get('/setup-admin', (req, res) => {
+  res.status(403).json({ message: 'This route is disabled in production.' });
 });
 
-// CLEAR DUMMY DATA ROUTE
-// Visit: /api/auth/clear-dummy-data to wipe all dummy data and reset Super Admin
-router.get('/clear-dummy-data', async (req, res) => {
-  try {
-    await db.execute('SET FOREIGN_KEY_CHECKS = 0');
-
-    const tablesToTruncate = [
-      'entry_logs',
-      'emergencies',
-      'guests',
-      'deliveries',
-      'vehicles',
-      'service_requests',
-      'announcements',
-      'push_subscriptions'
-    ];
-
-    let logs = [];
-    for (const table of tablesToTruncate) {
-      try {
-        await db.execute(`TRUNCATE TABLE ${table}`);
-        logs.push(`🧹 Cleared table: ${table}`);
-      } catch (err) {
-        await db.execute(`DELETE FROM ${table}`);
-        logs.push(`🧹 Deletions completed on table: ${table}`);
-      }
-    }
-
-    await db.execute('DELETE FROM users');
-    logs.push("🧹 Cleared users table.");
-
-    await db.execute(`
-      INSERT INTO societies (id, name, society_code, address, city, state, zip_code)
-      VALUES (1, 'Gaurav Heights', 'GH001', 'Sector 23', 'Mumbai', 'Maharashtra', '400001')
-      ON DUPLICATE KEY UPDATE name = name
-    `);
-    logs.push("🏢 Default society configured.");
-
-    const passwordHash = await bcrypt.hash('1234', 10);
-    await db.execute(`
-      INSERT INTO users (id, name, phone, password_hash, role, account_status, society_id)
-      VALUES (1, 'Super Admin', '9999999999', ?, 'super_admin', 'active', 1)
-    `, [passwordHash]);
-    logs.push("👑 Fresh Super Admin user created (Phone: 9999999999, Password: 1234).");
-
-    await db.execute('SET FOREIGN_KEY_CHECKS = 1');
-    logs.push("✅ Foreign key checks re-enabled.");
-
-    res.json({ message: '✨ Database cleanup complete! Real data ready.', logs });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Cleanup failed', error: err.message });
-  }
+// CLEAR DUMMY DATA ROUTE — DISABLED IN PRODUCTION
+// Uncomment locally only. Never expose this on a live server.
+router.get('/clear-dummy-data', (req, res) => {
+  res.status(403).json({ message: 'This route is disabled in production.' });
 });
 
 // RUN MIGRATIONS ROUTE
@@ -283,15 +210,9 @@ router.get('/run-migrations', async (req, res) => {
   }
 });
 
-// DEBUG DB ROUTE
-router.get('/debug-db', async (req, res) => {
-  try {
-    const [users] = await db.execute('SELECT id, name, phone, role, flat_number, society_id FROM users');
-    const [societies] = await db.execute('SELECT * FROM societies');
-    res.json({ users, societies });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// DEBUG DB ROUTE — DISABLED IN PRODUCTION (PII exposure risk)
+router.get('/debug-db', (req, res) => {
+  res.status(403).json({ message: 'This route is disabled in production.' });
 });
 
 

@@ -72,11 +72,11 @@ async function sendSinglePush(sub, title, body, data = {}) {
             ...data,
             title,
             body,
-            guest_id: data.guest_id ? String(data.guest_id) : undefined,
             is_visitor_call: 'true',
             visitor_name: data.visitor_name || 'Walk-in Visitor',
             flat_number: data.flat_number || '',
-            purpose: data.purpose || 'Walk-in'
+            purpose: data.purpose || 'Walk-in',
+            ...(data.guest_id ? { guest_id: String(data.guest_id) } : {})
           };
         } else {
           // Normal notification + data for background/foreground Capacitor listener
@@ -91,7 +91,7 @@ async function sendSinglePush(sub, title, body, data = {}) {
           };
         }
 
-        const response = await admin.messaging().send(message);
+        const response = await firebaseApp.messaging().send(message);
         console.log(`[Push] Mobile FCM v1 notification sent successfully to sub ID: ${sub.id}`);
       } catch (fcmErr) {
         console.error(`[Push] Mobile FCM v1 dispatch failed for sub ID: ${sub.id}:`, fcmErr.message);
@@ -112,8 +112,8 @@ async function sendSinglePush(sub, title, body, data = {}) {
             ...data,
             title,
             body,
-            guest_id: data.guest_id ? String(data.guest_id) : undefined,
             is_visitor_call: 'true',
+            ...(data.guest_id ? { guest_id: String(data.guest_id) } : {}),
             visitor_name: data.visitor_name || 'Walk-in Visitor',
             flat_number: data.flat_number || '',
             purpose: data.purpose || 'Walk-in'

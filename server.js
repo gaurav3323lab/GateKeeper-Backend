@@ -5,7 +5,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 
 const db = require('./config/db');
-const { setIO } = require('./utils/sendPush');
+const { setIO, sendPushToFlat } = require('./utils/sendPush');
 
 dotenv.config();
 
@@ -26,7 +26,6 @@ const io = new Server(server, {
 setIO(io);
 
 // Middleware
-app.use(cors()); // Standard CORS helper
 
 // Bulletproof custom CORS & preflight manual middleware
 app.use((req, res, next) => {
@@ -163,7 +162,6 @@ io.on('connection', (socket) => {
 
     // Call sendPushToFlat to trigger high-priority background FCM call alert!
     try {
-      const { sendPushToFlat } = require('./utils/sendPush');
       await sendPushToFlat(
         data.tower,
         data.flat_number,

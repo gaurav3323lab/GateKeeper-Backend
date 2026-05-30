@@ -387,7 +387,7 @@ router.get('/logs', verifyToken, async (req, res) => {
       LEFT JOIN users uv ON v.user_id = uv.id
       LEFT JOIN staff s ON el.entity_type = 'staff' AND el.entity_id = s.id
       LEFT JOIN users gu ON el.guard_id = gu.id
-      WHERE COALESCE(ug.society_id, uv.society_id, gu.society_id) = ? OR el.guard_id IS NULL
+      WHERE COALESCE(ug.society_id, uv.society_id, s.society_id, gu.society_id) = ?
       ORDER BY el.entry_time DESC
       LIMIT 100
     `, [societyId]);
@@ -649,12 +649,6 @@ router.get('/pending-visitor', verifyToken, async (req, res) => {
   if (!flat_number) return res.json({ visitor: null });
 
   try {
-    // Auto-heal: agar approval_status column nahi hai toh create karo
-    try {
-      await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
-      console.log('[Auto-Heal] approval_status column added to guests');
-    } catch (e) { /* column already exists — ignore */ }
-
     const [rows] = await db.execute(
       `SELECT g.id AS guest_id, g.name, g.phone, g.purpose, g.approval_status, g.created_at
        FROM guests g
