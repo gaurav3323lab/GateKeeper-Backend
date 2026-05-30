@@ -20,8 +20,15 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     if (typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'object') {
       serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
     } else {
-      // Remove possible newlines or formatting noise before parsing
-      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.trim());
+      // Auto-heal: Strip leading/trailing single or double quotes if preserved by parser
+      let envVal = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
+      if (envVal.startsWith("'") && envVal.endsWith("'")) {
+        envVal = envVal.slice(1, -1).trim();
+      }
+      if (envVal.startsWith('"') && envVal.endsWith('"')) {
+        envVal = envVal.slice(1, -1).trim();
+      }
+      serviceAccount = JSON.parse(envVal);
     }
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
