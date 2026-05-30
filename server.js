@@ -466,6 +466,11 @@ async function autoMigrate() {
       console.log('✅ Auto-migration: Added vehicle_number column to entry_logs successfully.');
     } catch (e) { /* ignore if already exists */ }
 
+    try {
+      await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
+      console.log('✅ Auto-migration: Added approval_status column to guests successfully.');
+    } catch (e) { /* ignore if already exists */ }
+
     console.log('✅ Auto-migration complete: push_subscriptions, emergency_contacts + community tables ready.');
   } catch (err) {
     // Migration fail hone par sirf log karein, server band mat karein

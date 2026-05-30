@@ -387,7 +387,7 @@ router.get('/logs', verifyToken, async (req, res) => {
       LEFT JOIN users uv ON v.user_id = uv.id
       LEFT JOIN staff s ON el.entity_type = 'staff' AND el.entity_id = s.id
       LEFT JOIN users gu ON el.guard_id = gu.id
-      WHERE COALESCE(ug.society_id, uv.society_id, s.society_id, gu.society_id) = ?
+      WHERE COALESCE(ug.society_id, uv.society_id, gu.society_id) = ?
       ORDER BY el.entry_time DESC
       LIMIT 100
     `, [societyId]);
