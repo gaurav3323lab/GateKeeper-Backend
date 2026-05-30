@@ -138,6 +138,24 @@ router.post('/manual-log', async (req, res) => {
       } catch (err) {
         console.warn('Failed to query existing guest_id:', err.message);
       }
+    } else {
+      // Safety Net: If guest_id is missing, auto-match by name & host created in last 2 minutes
+      try {
+        const [recentRows] = await db.execute(
+          `SELECT id FROM guests 
+           WHERE name = ? 
+             AND host_id = ? 
+             AND created_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE) 
+           ORDER BY created_at DESC LIMIT 1`,
+          [visitor_name, hostId]
+        );
+        if (recentRows.length > 0) {
+          existingGuest = recentRows[0].id;
+          console.log(`[Safety-Net] Auto-matched guest_id ${existingGuest} by name & host for double-call prevention!`);
+        }
+      } catch (err) {
+        console.warn('Safety-net guest lookup failed:', err.message);
+      }
     }
 
     if (existingGuest) {
