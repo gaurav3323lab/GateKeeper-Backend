@@ -20,14 +20,32 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     if (typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'object') {
       serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
     } else {
-      // Auto-heal: Strip leading/trailing single or double quotes if preserved by parser
+      // Auto-heal: Strip leading/trailing single/double quotes & unescape backslashes if preserved by Hostinger/PM2/dotenv
       let envVal = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
+      
+      // 1. Strip leading and trailing single quotes
       if (envVal.startsWith("'") && envVal.endsWith("'")) {
         envVal = envVal.slice(1, -1).trim();
       }
+      
+      // 2. Strip leading and trailing double quotes
       if (envVal.startsWith('"') && envVal.endsWith('"')) {
         envVal = envVal.slice(1, -1).trim();
       }
+      
+      // 3. Strip leading and trailing backslashes (e.g. \{"type" or "...}\")
+      if (envVal.startsWith('\\')) {
+        envVal = envVal.slice(1).trim();
+      }
+      if (envVal.endsWith('\\')) {
+        envVal = envVal.slice(0, -1).trim();
+      }
+      
+      // 4. Replace escaped double quotes if double-escaping occurred (e.g. \"type\" to "type")
+      if (envVal.includes('\\"')) {
+        envVal = envVal.replace(/\\"/g, '"');
+      }
+      
       serviceAccount = JSON.parse(envVal);
     }
     firebaseApp = admin.initializeApp({
