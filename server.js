@@ -135,12 +135,36 @@ io.on('connection', (socket) => {
         residentSocietyId = users[0].society_id;
       }
 
-      // 2. Insert into guests table with approval_status = 'pending'
-      const [guestResult] = await db.execute(
-        `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
-         VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
-        [data.name, data.phone || 'N/A', data.purpose || 'Walk-in', hostId]
-      );
+      // 2. Insert into guests table with approval_status = 'pending' and include vehicle_number (with auto-heal fallback)
+      let guestResult;
+      try {
+        [guestResult] = await db.execute(
+          `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status, vehicle_number)
+           VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending', ?)`,
+          [data.name, data.phone || 'N/A', data.purpose || 'Walk-in', hostId, data.vehicle_number || null]
+        );
+      } catch (err) {
+        if (err.code === 'ER_BAD_FIELD_ERROR' && err.message.includes('vehicle_number')) {
+          console.log('[Auto-Heal] Adding vehicle_number column to guests...');
+          try {
+            await db.execute('ALTER TABLE guests ADD COLUMN vehicle_number VARCHAR(20) DEFAULT NULL');
+          } catch (alterErr) {
+            console.error('[Auto-Heal] Failed to add vehicle_number to guests:', alterErr.message);
+          }
+          [guestResult] = await db.execute(
+            `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status, vehicle_number)
+             VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending', ?)`,
+            [data.name, data.phone || 'N/A', data.purpose || 'Walk-in', hostId, data.vehicle_number || null]
+          );
+        } else {
+          // Fallback if other error or approval_status is also missing (will trigger alter inside guests)
+          [guestResult] = await db.execute(
+            `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
+             VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
+            [data.name, data.phone || 'N/A', data.purpose || 'Walk-in', hostId]
+          );
+        }
+      }
       guestId = guestResult.insertId;
     } catch (dbErr) {
       console.error('Failed to create guest record in visitor_arrival:', dbErr.message);
@@ -153,7 +177,8 @@ io.on('connection', (socket) => {
       purpose: data.purpose || 'Guest',
       flat_number: data.flat_number,
       tower: data.tower || null,
-      society_id: residentSocietyId
+      society_id: residentSocietyId,
+      vehicle_number: data.vehicle_number || null
     };
 
     // Emit real-time Socket event to isolated flat room (with society_id prefix)
@@ -162,11 +187,12 @@ io.on('connection', (socket) => {
 
     // Call sendPushToFlat to trigger high-priority background FCM call alert!
     try {
+      const activeVehicleNumber = data.vehicle_number ? ` [Gaadi: ${data.vehicle_number}]` : '';
       await sendPushToFlat(
         data.tower,
         data.flat_number,
         `🚪 Visitor Aaya!`,
-        `${data.name} gate par hain. Purpose: ${data.purpose || 'Guest'} — Tap karke approve/deny karein`,
+        `${data.name} gate par hain${activeVehicleNumber}. Purpose: ${data.purpose || 'Guest'} — Tap karke approve/deny karein`,
         { 
           url: guestId ? `/?pending_visitor=${guestId}` : `/?visitor_name=${data.name}`, 
           type: 'visitor', 
@@ -174,10 +200,11 @@ io.on('connection', (socket) => {
           society_id: residentSocietyId, 
           guest_id: guestId, 
           visitor_name: data.name, 
-          purpose: data.purpose || 'Guest' 
+          purpose: data.purpose || 'Guest',
+          vehicle_number: data.vehicle_number || ''
         }
       );
-      console.log(`[Socket] Push sent to flat for visitor arrival: ${data.name}`);
+      console.log(`[Socket] Push sent to flat for visitor arrival: ${data.name} with vehicle: ${data.vehicle_number || 'None'}`);
     } catch (pushErr) {
       console.error('Failed to send push in visitor_arrival:', pushErr.message);
     }

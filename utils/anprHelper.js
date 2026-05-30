@@ -24,7 +24,6 @@ const COMMON_STATE_CORRECTIONS = {
   'U1': 'UP', 'UI': 'UP', 'U0': 'UP', 'UO': 'UP',
   'VP': 'UP', '0P': 'UP', 'OP': 'UP',
   // GJ (Gujarat) — G confused with C/6; J confused with I/1
-  // NOTE: CI and CJ intentionally NOT here (ambiguous with Chandigarh CH)
   'G1': 'GJ', 'GI': 'GJ', 'G0': 'GJ', 'GO': 'GJ',
   '61': 'GJ', '6I': 'GJ', '6J': 'GJ',
   // CH (Chandigarh) — C confused with G/6; H confused with 1
@@ -55,7 +54,7 @@ const COMMON_STATE_CORRECTIONS = {
   '1H': 'JH', 'IH': 'JH',
   // OD (Odisha) — O confused with 0
   'O0': 'OD', '0D': 'OD', '00': 'OD',
-  // MP (Madhya Pradesh) \u2014 M and P are both clear letters, no real OCR typos
+  // MP (Madhya Pradesh)
   'MP': 'MP',
   // GA (Goa)
   'GA': 'GA', '6A': 'GA',
@@ -71,6 +70,23 @@ const COMMON_STATE_CORRECTIONS = {
   'MN': 'MN', 'ML': 'ML', 'MZ': 'MZ',
   // UK (Uttarakhand)
   'UK': 'UK', 'U1K': 'UK',
+};
+
+const VALID_RTO_RANGES = {
+  'DL': { min: 1, max: 14 },
+  'MH': { min: 1, max: 52 },
+  'UP': { min: 11, max: 96 },
+  'KA': { min: 1, max: 71 },
+  'CH': { min: 1, max: 4 },
+  'GJ': { min: 1, max: 38 },
+  'HR': { min: 1, max: 99 },
+  'TS': { min: 1, max: 36 },
+  'AP': { min: 1, max: 39 },
+  'BR': { min: 1, max: 57 },
+  'WB': { min: 1, max: 99 },
+  'PB': { min: 1, max: 99 },
+  'RJ': { min: 1, max: 58 },
+  'TN': { min: 1, max: 99 }
 };
 
 const CHAR_TO_DIGIT = {
@@ -103,11 +119,44 @@ function forceChar(char) {
 function cleanAndCorrectPlate(ocrText) {
   if (!ocrText) return { original: '', corrected: '', formatted: '', type: 'Unknown' };
 
-  // 1. Convert to uppercase and strip ALL non-alphanumeric characters including spaces
-  let cleaned = ocrText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // 1. Convert to uppercase and strip ALL non-alphanumeric characters (except Military caret)
+  let cleaned = ocrText.toUpperCase().replace(/[^A-Z0-9^]/g, '');
 
-  // 2. Remove HSRP license plate noise prefixes (IND / INDIA)
-  // Matches: IND, 1ND, LND (L looks like I), followed by optional IA/1A
+  // 2. Military (Defence) Plate check
+  // Standard format starts with an upward caret ^ (or OCR-ed as A, 7, 1) and contains 8-11 characters
+  const startChar = cleaned[0];
+  const isMilitaryPattern = (startChar === '^' || startChar === 'A' || startChar === '7') && 
+                            cleaned.length >= 8 && cleaned.length <= 11 && 
+                            !isNaN(cleaned[1]) && !isNaN(cleaned[2]);
+  
+  if (isMilitaryPattern) {
+    const yearPart = forceDigit(cleaned[1]) + forceDigit(cleaned[2]);
+    const classLetter = forceChar(cleaned[3]);
+    let numPart = '';
+    let lastChar = '';
+    
+    for (let i = 4; i < cleaned.length; i++) {
+      if (i === cleaned.length - 1 && isNaN(cleaned[i])) {
+        lastChar = forceChar(cleaned[i]);
+      } else {
+        numPart += forceDigit(cleaned[i]);
+      }
+    }
+    
+    if (numPart.length >= 5) {
+      const corrected = `↑${yearPart}${classLetter}${numPart}${lastChar}`;
+      const formatted = `↑ ${yearPart} ${classLetter} ${numPart} ${lastChar}`.trim();
+      return {
+        original: ocrText.trim(),
+        corrected,
+        formatted,
+        type: 'Military'
+      };
+    }
+  }
+
+  // Normal HSRP noise cleanup (strip caret now that military check is done)
+  cleaned = cleaned.replace(/[^A-Z0-9]/g, '');
   const hsrpRegex = /^[1IL]ND(?:1A|IA|A)?/;
   cleaned = cleaned.replace(hsrpRegex, '');
 
@@ -121,24 +170,20 @@ function cleanAndCorrectPlate(ocrText) {
   }
 
   // 3. BH Series detection: e.g. "22 BH 1234 AA" (YY BH #### XX)
-  // Check if character 2,3 fits "BH" structure (e.g. "BH", "8H", "BH", "3H")
   const char2 = cleaned[2];
   const char3 = cleaned[3];
   const isBHPattern = (char2 === 'B' || char2 === '8') && 
                       (char3 === 'H' || char3 === '1' || char3 === 'I' || char3 === 'T' || char3 === 'L');
   
   if (cleaned.length >= 8 && cleaned.length <= 10 && isBHPattern) {
-    // Correct BH Series
     const yearPart = forceDigit(cleaned[0]) + forceDigit(cleaned[1]);
     const bhPart = 'BH';
     
-    // Number part: next 4 characters should be digits
     let numPart = '';
     for (let i = 4; i < Math.min(8, cleaned.length); i++) {
       numPart += forceDigit(cleaned[i]);
     }
     
-    // Series part: remaining characters should be letters
     let seriesPart = '';
     for (let i = 8; i < cleaned.length; i++) {
       seriesPart += forceChar(cleaned[i]);
@@ -155,75 +200,104 @@ function cleanAndCorrectPlate(ocrText) {
     };
   }
 
-  // 4. Standard RTO License Plate: State(2) + RTO(2) + Series(0-3) + Number(1-4)
-  // State Code (indices 0 and 1)
+  // 4. Temporary Registration Indicator (e.g. MH 12 TEMP 1234, TS 12 TMP 1234)
+  const isTemporary = cleaned.includes('TEMP') || cleaned.includes('TMP');
+  if (isTemporary) {
+    const tempWord = cleaned.includes('TEMP') ? 'TEMP' : 'TMP';
+    const splitParts = cleaned.split(tempWord);
+    if (splitParts.length === 2) {
+      const leftPart = splitParts[0];
+      const rightPart = splitParts[1];
+      
+      let leftState = forceChar(leftPart[0]) + forceChar(leftPart[1]);
+      if (COMMON_STATE_CORRECTIONS[leftState]) leftState = COMMON_STATE_CORRECTIONS[leftState];
+      
+      const leftRto = forceDigit(leftPart[2]) + forceDigit(leftPart[3]);
+      let rightNum = '';
+      for (let i = 0; i < rightPart.length; i++) rightNum += forceDigit(rightPart[i]);
+      
+      const corrected = `${leftState}${leftRto}${tempWord}${rightNum}`;
+      const formatted = `${leftState} ${leftRto} ${tempWord} ${rightNum}`;
+      
+      return {
+        original: ocrText.trim(),
+        corrected,
+        formatted,
+        type: 'Temporary'
+      };
+    }
+  }
+
+  // 5. Standard RTO License Plate: State(2) + RTO(2) + Series(0-3) + Number(1-4)
   let stateChar0 = forceChar(cleaned[0]);
   let stateChar1 = forceChar(cleaned[1]);
   let statePart = stateChar0 + stateChar1;
 
-  // Apply visual RTO state corrections
   if (!VALID_STATES.includes(statePart)) {
     if (COMMON_STATE_CORRECTIONS[statePart]) {
       statePart = COMMON_STATE_CORRECTIONS[statePart];
     }
   }
 
-  // RTO Code (indices 2 and 3)
   const rtoPart = forceDigit(cleaned[2]) + forceDigit(cleaned[3]);
+  
+  // Apply Intelligent RTO Code Validation & Auto-Correction
+  let correctedRto = rtoPart;
+  if (VALID_RTO_RANGES[statePart]) {
+    const range = VALID_RTO_RANGES[statePart];
+    const rtoVal = parseInt(rtoPart, 10);
+    if (rtoVal < range.min || rtoVal > range.max) {
+      const firstDigit = rtoPart[0];
+      const secondDigit = rtoPart[1];
+      if (firstDigit > '1') {
+        const tryZero = parseInt('0' + secondDigit, 10);
+        const tryOne = parseInt('1' + secondDigit, 10);
+        if (tryZero >= range.min && tryZero <= range.max) {
+          correctedRto = '0' + secondDigit;
+        } else if (tryOne >= range.min && tryOne <= range.max) {
+          correctedRto = '1' + secondDigit;
+        }
+      }
+    }
+  }
 
-  // Suffix (remaining characters starting from index 4)
   const suffix = cleaned.substring(4);
   
   if (suffix.length === 0) {
-    const corrected = statePart + rtoPart;
+    const corrected = statePart + correctedRto;
     return {
       original: ocrText.trim(),
       corrected,
-      formatted: `${statePart} ${rtoPart}`.trim(),
+      formatted: `${statePart} ${correctedRto}`.trim(),
       type: 'RTO'
     };
   }
 
-  // Run dynamic split scoring to find the series / number boundary
   let bestSplit = 0;
   let maxScore = -Infinity;
   
-  // k is the length of the series letters candidate (up to 3 chars)
   const maxK = Math.min(3, suffix.length);
   for (let k = 0; k <= maxK; k++) {
     const seriesCandidate = suffix.substring(0, k);
     const numberCandidate = suffix.substring(k);
     
-    // Registration numbers are at most 4 digits
     if (numberCandidate.length > 4) continue;
     
     let score = 0;
-    
-    // Score series letters candidate (expects letters)
     for (let i = 0; i < seriesCandidate.length; i++) {
       const c = seriesCandidate[i];
-      if (c >= 'A' && c <= 'Z') {
-        score += 1.5;
-      } else if (DIGIT_TO_CHAR[c]) { // If it's a digit that maps to a letter (e.g. '1' -> 'I')
-        score += 0.5;
-      } else {
-        score -= 1.0;
-      }
+      if (c >= 'A' && c <= 'Z') score += 1.5;
+      else if (DIGIT_TO_CHAR[c]) score += 0.5;
+      else score -= 1.0;
     }
     
-    // Score registration numbers candidate (expects digits)
     for (let i = 0; i < numberCandidate.length; i++) {
       const c = numberCandidate[i];
-      if (c >= '0' && c <= '9') {
-        score += 1.5;
-      } else if (CHAR_TO_DIGIT[c]) { // If it's a letter that maps to a digit (e.g. 'O' -> '0')
-        score += 0.5;
-      } else {
-        score -= 1.0;
-      }
+      if (c >= '0' && c <= '9') score += 1.5;
+      else if (CHAR_TO_DIGIT[c]) score += 0.5;
+      else score -= 1.0;
     }
     
-    // Layout priors
     if (numberCandidate.length === 0) score -= 5.0;
     else if (numberCandidate.length === 4) score += 1.0;
     else if (numberCandidate.length === 3) score += 0.4;
@@ -239,7 +313,6 @@ function cleanAndCorrectPlate(ocrText) {
     }
   }
 
-  // Segment and correct parts using best split point
   const seriesRaw = suffix.substring(0, bestSplit);
   const numberRaw = suffix.substring(bestSplit);
 
@@ -253,8 +326,8 @@ function cleanAndCorrectPlate(ocrText) {
     numberPart += forceDigit(numberRaw[i]);
   }
 
-  const corrected = `${statePart}${rtoPart}${seriesPart}${numberPart}`;
-  const formatted = `${statePart} ${rtoPart} ${seriesPart} ${numberPart}`.replace(/\s+/g, ' ').trim();
+  const corrected = `${statePart}${correctedRto}${seriesPart}${numberPart}`;
+  const formatted = `${statePart} ${correctedRto} ${seriesPart} ${numberPart}`.replace(/\s+/g, ' ').trim();
 
   return {
     original: ocrText.trim(),

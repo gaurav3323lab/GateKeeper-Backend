@@ -13,20 +13,38 @@ function emitNotif(room, data) {
 
 // ── Firebase Admin SDK Safe Init (Modern FCM HTTP v1) ──────────
 let firebaseApp = null;
-const serviceAccountPath = path.join(__dirname, '../firebase-service-account.json');
 
-if (fs.existsSync(serviceAccountPath)) {
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   try {
-    const serviceAccount = require(serviceAccountPath);
+    let serviceAccount;
+    if (typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'object') {
+      serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
+    } else {
+      // Remove possible newlines or formatting noise before parsing
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.trim());
+    }
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
-    console.log('[Push] Firebase Admin SDK initialized successfully with HTTP v1 API ✅');
+    console.log('[Push] Firebase Admin SDK initialized successfully via Environment Variable ✅');
   } catch (err) {
-    console.error('[Push] Failed to initialize Firebase Admin SDK:', err.message);
+    console.error('[Push] Failed to initialize Firebase Admin SDK from FIREBASE_SERVICE_ACCOUNT env:', err.message);
   }
 } else {
-  console.warn('[Push] firebase-service-account.json not found at root. Modern FCM HTTP v1 notifications will not be sent.');
+  const serviceAccountPath = path.join(__dirname, '../firebase-service-account.json');
+  if (fs.existsSync(serviceAccountPath)) {
+    try {
+      const serviceAccount = require(serviceAccountPath);
+      firebaseApp = admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      });
+      console.log('[Push] Firebase Admin SDK initialized successfully with HTTP v1 API file ✅');
+    } catch (err) {
+      console.error('[Push] Failed to initialize Firebase Admin SDK from file:', err.message);
+    }
+  } else {
+    console.warn('[Push] Neither FIREBASE_SERVICE_ACCOUNT env nor firebase-service-account.json file was found at root. Modern FCM HTTP v1 notifications will not be sent.');
+  }
 }
 
 // ── VAPID Safe Init ───────────────────────────────────────────

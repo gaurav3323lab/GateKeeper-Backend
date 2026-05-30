@@ -160,13 +160,13 @@ router.post('/manual-log', async (req, res) => {
 
     if (existingGuest) {
       guestId = existingGuest;
-      // Update existing guest info and mark approved
+      // Update existing guest info and mark approved (including vehicle_number)
       try {
         await db.execute(
           `UPDATE guests 
-           SET name = ?, phone = ?, purpose = ?, host_id = ?, approval_status = 'approved' 
+           SET name = ?, phone = ?, purpose = ?, host_id = ?, approval_status = 'approved', vehicle_number = ? 
            WHERE id = ?`,
-          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId, guestId]
+          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId, vehicle_number || null, guestId]
         );
       } catch (colErr) {
         // Fallback if column missing or has errors
@@ -178,27 +178,40 @@ router.post('/manual-log', async (req, res) => {
         );
       }
     } else {
-      // Auto-heal: try with approval_status, fallback without if column missing
+      // Auto-heal: try with approval_status and vehicle_number, fallback without if column missing
       try {
         const [guestResult] = await db.execute(
-          `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
-           VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
-          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
+          `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status, vehicle_number)
+           VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending', ?)`,
+          [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId, vehicle_number || null]
         );
         guestId = guestResult.insertId;
       } catch (colErr) {
         if (colErr.code === 'ER_BAD_FIELD_ERROR') {
-          // Column doesn't exist yet — add it and retry
-          console.log('[Auto-Heal] Adding approval_status column to guests...');
+          // Column vehicle_number or approval_status doesn't exist yet — let's add them
+          console.log('[Auto-Heal] Altering guests table to support approval_status and vehicle_number...');
           try {
             await db.execute(`ALTER TABLE guests ADD COLUMN approval_status ENUM('pending','approved','denied','expired') DEFAULT 'approved'`);
-          } catch (e) { /* already exists */ }
-          const [guestResult] = await db.execute(
-            `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status)
-             VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending')`,
-            [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
-          );
-          guestId = guestResult.insertId;
+          } catch (e) {}
+          try {
+            await db.execute(`ALTER TABLE guests ADD COLUMN vehicle_number VARCHAR(20) DEFAULT NULL`);
+          } catch (e) {}
+          
+          try {
+            const [guestResult] = await db.execute(
+              `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to, approval_status, vehicle_number)
+               VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY), 'pending', ?)`,
+              [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId, vehicle_number || null]
+            );
+            guestId = guestResult.insertId;
+          } catch (retryErr) {
+            const [guestResult] = await db.execute(
+              `INSERT INTO guests (name, phone, purpose, host_id, qr_code, valid_from, valid_to)
+               VALUES (?, ?, ?, ?, CONCAT('manual_', UNIX_TIMESTAMP()), NOW(), DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+              [visitor_name, visitor_phone || 'N/A', purpose || 'Walk-in', hostId]
+            );
+            guestId = guestResult.insertId;
+          }
         } else throw colErr;
       }
     }
@@ -687,19 +700,37 @@ router.get('/pending-visitor', verifyToken, async (req, res) => {
   if (!flat_number) return res.json({ visitor: null });
 
   try {
-    const [rows] = await db.execute(
-      `SELECT g.id AS guest_id, g.name, g.phone, g.purpose, g.approval_status, g.created_at
-       FROM guests g
-       JOIN users u ON g.host_id = u.id
-       WHERE COALESCE(u.tower, '') = CAST(? AS CHAR)
-         AND u.flat_number = ?
-         AND u.society_id = ?
-         AND g.approval_status = 'pending'
-         AND g.created_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
-       ORDER BY g.created_at DESC
-       LIMIT 1`,
-      [tower || '', flat_number, req.user.society_id || null]
-    );
+    let rows;
+    try {
+      [rows] = await db.execute(
+        `SELECT g.id AS guest_id, g.name, g.phone, g.purpose, g.approval_status, g.created_at, g.vehicle_number
+         FROM guests g
+         JOIN users u ON g.host_id = u.id
+         WHERE COALESCE(u.tower, '') = CAST(? AS CHAR)
+           AND u.flat_number = ?
+           AND u.society_id = ?
+           AND g.approval_status = 'pending'
+           AND g.created_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+         ORDER BY g.created_at DESC
+         LIMIT 1`,
+        [tower || '', flat_number, req.user.society_id || null]
+      );
+    } catch (colErr) {
+      // Fallback if vehicle_number column does not exist yet
+      [rows] = await db.execute(
+        `SELECT g.id AS guest_id, g.name, g.phone, g.purpose, g.approval_status, g.created_at
+         FROM guests g
+         JOIN users u ON g.host_id = u.id
+         WHERE COALESCE(u.tower, '') = CAST(? AS CHAR)
+           AND u.flat_number = ?
+           AND u.society_id = ?
+           AND g.approval_status = 'pending'
+           AND g.created_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+         ORDER BY g.created_at DESC
+         LIMIT 1`,
+        [tower || '', flat_number, req.user.society_id || null]
+      );
+    }
 
     if (rows.length === 0) return res.json({ visitor: null });
 
@@ -709,7 +740,8 @@ router.get('/pending-visitor', verifyToken, async (req, res) => {
         name: rows[0].name,
         phone: rows[0].phone,
         purpose: rows[0].purpose,
-        created_at: rows[0].created_at
+        created_at: rows[0].created_at,
+        vehicle_number: rows[0].vehicle_number || null
       }
     });
   } catch (err) {
