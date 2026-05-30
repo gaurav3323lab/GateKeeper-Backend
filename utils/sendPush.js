@@ -57,6 +57,14 @@ async function sendSinglePush(sub, title, body, data = {}) {
       try {
         const isVisitorCall = data.type === 'visitor';
         
+        // Clean and stringify all keys/values in the data payload
+        const cleanData = {};
+        for (const [key, val] of Object.entries(data)) {
+          if (val !== null && val !== undefined) {
+            cleanData[key] = String(val);
+          }
+        }
+
         const message = {
           token: sub.fcm_token,
           android: {
@@ -69,25 +77,25 @@ async function sendSinglePush(sub, title, body, data = {}) {
           
           // Pure data payload for MyMessagingService background processing
           message.data = {
-            ...data,
-            title,
-            body,
+            ...cleanData,
+            title: String(title || ''),
+            body: String(body || ''),
             is_visitor_call: 'true',
-            visitor_name: data.visitor_name || 'Walk-in Visitor',
-            flat_number: data.flat_number || '',
-            purpose: data.purpose || 'Walk-in',
+            visitor_name: String(data.visitor_name || 'Walk-in Visitor'),
+            flat_number: String(data.flat_number || ''),
+            purpose: String(data.purpose || 'Walk-in'),
             ...(data.guest_id ? { guest_id: String(data.guest_id) } : {})
           };
         } else {
           // Normal notification + data for background/foreground Capacitor listener
           message.notification = {
-            title,
-            body
+            title: String(title || ''),
+            body: String(body || '')
           };
           message.data = {
-            ...data,
-            title,
-            body
+            ...cleanData,
+            title: String(title || ''),
+            body: String(body || '')
           };
         }
 
