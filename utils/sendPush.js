@@ -20,7 +20,6 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     if (typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'object') {
       serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
     } else {
-      // Auto-heal: Strip leading/trailing single/double quotes & unescape backslashes if preserved by Hostinger/PM2/dotenv
       let envVal = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
       
       // 1. Strip leading and trailing single quotes
@@ -41,12 +40,56 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
         envVal = envVal.slice(0, -1).trim();
       }
       
-      // 4. Replace escaped double quotes if double-escaping occurred (e.g. \"type\" to "type")
-      if (envVal.includes('\\"')) {
-        envVal = envVal.replace(/\\"/g, '"');
+      // 4. Try parsing with standard JSON.parse first (with simple unescaping)
+      try {
+        let cleanVal = envVal;
+        if (cleanVal.includes('\\"')) {
+          cleanVal = cleanVal.replace(/\\"/g, '"');
+        }
+        serviceAccount = JSON.parse(cleanVal);
+      } catch (jsonErr) {
+        console.warn('[Push] Standard JSON.parse failed, running regex-based deep recovery parser...', jsonErr.message);
+        
+        // 5. Deep Recovery: Regex-based parsing to extract credentials without crashing on bad escapes
+        try {
+          const fields = [
+            'type', 'project_id', 'private_key_id', 'private_key', 'client_email',
+            'client_id', 'auth_uri', 'token_uri', 'auth_provider_x509_cert_url',
+            'client_x509_cert_url', 'universe_domain'
+          ];
+          const recovered = {};
+          
+          for (const field of fields) {
+            const doubleQuoteRegex = new RegExp(`"${field}"\\s*:\\s*"([^"]+)"`);
+            const singleQuoteRegex = new RegExp(`'${field}'\\s*:\\s*'([^']+)'`);
+            
+            let match = envVal.match(doubleQuoteRegex);
+            if (!match) match = envVal.match(singleQuoteRegex);
+            
+            if (match) {
+              recovered[field] = match[1];
+            }
+          }
+          
+          if (recovered.private_key) {
+            // Restore actual newlines in PEM private key
+            recovered.private_key = recovered.private_key
+              .replace(/\\n/g, '\n')
+              .replace(/\\r/g, '\r')
+              .replace(/\\([a-zA-Z])/g, '\n$1') // Recovery: Restore lost 'n' from '\M', '\A' etc.
+              .replace(/\\/g, ''); // Remove stray backslashes
+          }
+          
+          if (recovered.project_id && recovered.private_key && recovered.client_email) {
+            serviceAccount = recovered;
+            console.log('[Push] Deep Recovery Parser successfully extracted Firebase credentials! 🎉');
+          } else {
+            throw new Error('Required fields (project_id, private_key, client_email) are missing in recovered object');
+          }
+        } catch (recoveryErr) {
+          throw new Error(`Both standard and recovery parsers failed. JSON error: ${jsonErr.message}. Recovery error: ${recoveryErr.message}`);
+        }
       }
-      
-      serviceAccount = JSON.parse(envVal);
     }
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
