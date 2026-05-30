@@ -103,6 +103,18 @@ async function sendSinglePush(sub, title, body, data = {}) {
         console.log(`[Push] Mobile FCM v1 notification sent successfully to sub ID: ${sub.id}`);
       } catch (fcmErr) {
         console.error(`[Push] Mobile FCM v1 dispatch failed for sub ID: ${sub.id}:`, fcmErr.message);
+        // Auto-clean expired/uninstalled mobile tokens to keep database clean and prevent duplicate warnings
+        if (
+          fcmErr.code === 'messaging/registration-token-not-registered' || 
+          fcmErr.message.includes('Requested entity was not found')
+        ) {
+          try {
+            await db.execute('DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
+            console.log(`[Push] Auto-pruned uninstalled/expired mobile subscription (ID: ${sub.id}) from database.`);
+          } catch (delErr) {
+            console.error('Failed to prune expired FCM token:', delErr.message);
+          }
+        }
       }
     } else {
       // Legacy Fallback (Returns 404 on modern accounts but preserved as safe fallback)
